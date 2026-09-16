@@ -1528,9 +1528,9 @@ describe("pushing read state back to the Mac", () => {
       .toEqual(["--chat", "them@example.com"]);
   });
 
-  test("a group is never pushed per-thread — it has no imessage:// form", () => {
-    expect(pushReadArgs("thread", { markRead: false, readChat: "chat900000000000000001" })).toBeNull();
-    expect(pushReadArgs("thread", { markRead: false, readChat: "ce5a593a78af408282d61461ade89135" })).toBeNull();
+  test("group reads carry the opaque chat ID, never the last speaker", () => {
+    expect(pushReadArgs("thread", { markRead: false, readChat: "chat900000000000000001" })).toEqual(["--chat", "chat900000000000000001"]);
+    expect(pushReadArgs("thread", { markRead: false, readChat: "ce5a593a78af408282d61461ade89135" })).toEqual(["--chat", "ce5a593a78af408282d61461ade89135"]);
     expect(pushReadArgs("thread", { markRead: false, readChat: "" })).toBeNull();
   });
 });
@@ -1976,14 +1976,14 @@ describe("the read-push policy is reported, not just applied", () => {
     expect(pushReadArgs("all", { markRead: false, readChat: "+15550100001" })).toBeNull();
     expect(pushReadArgs("all", { markRead: true, readChat: "" })).toEqual(["--all"]);
   });
-  test("thread pushes a DM you open, but never a group", () => {
+  test("thread pushes DMs and groups on read transitions", () => {
     expect(pushReadArgs("thread", { markRead: false, readChat: "+15550100001" }))
       .toEqual(["--chat", "+15550100001"]);
     expect(pushReadArgs("thread", { markRead: false, readChat: "pat@example.com" }))
       .toEqual(["--chat", "pat@example.com"]);
-    // 32-hex and chat<digits> have no imessage:// form
-    expect(pushReadArgs("thread", { markRead: false, readChat: "ce5a593a78af408282d61461ade89135" })).toBeNull();
-    expect(pushReadArgs("thread", { markRead: false, readChat: "chat224479848698394295" })).toBeNull();
+    // Both known group identifier formats reach the Mac unchanged.
+    expect(pushReadArgs("thread", { markRead: false, readChat: "ce5a593a78af408282d61461ade89135" })).toEqual(["--chat", "ce5a593a78af408282d61461ade89135"]);
+    expect(pushReadArgs("thread", { markRead: false, readChat: "chat224479848698394295" })).toEqual(["--chat", "chat224479848698394295"]);
   });
   test("the failure path still reports the policy and the guarded arrays", () => {
     // status says read_push=? exactly when something is broken, unless the

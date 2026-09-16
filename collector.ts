@@ -1096,8 +1096,11 @@ export function pushReadArgs(
   // there — once per poll for as long as the thread stays open.
   if (opts.clearedUnread === false) return null;
   const chat = String(opts.readChat || "");
-  // Groups have no imessage:// form, so only a DM can be aimed at.
-  if (!/^\+?[0-9]{3,15}$/.test(chat) && !/^[^@\s]+@[^@\s]+$/.test(chat)) return null;
+  // The Mac resolves group identifiers through Messages' groupid deep link.
+  // Never substitute the last speaker's handle for a group.
+  if (chat.length > 254 || (!/^\+?[0-9]{3,15}$/.test(chat)
+      && !/^[^@\s\x00-\x1f\x7f]+@[^@\s\x00-\x1f\x7f]+$/.test(chat)
+      && !/^(?:chat[0-9]{1,40}|[a-fA-F0-9]{32})$/.test(chat))) return null;
   return ["--chat", chat];
 }
 
