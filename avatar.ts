@@ -7,7 +7,7 @@
  *
  *   bun avatar.ts <handle>   → {"ok":true,"url":"file://…"} | {"ok":false,…}
  */
-import { shimPath } from "./shim-path";
+import { bridgeFor } from "./shim-path";
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -80,7 +80,8 @@ export function fetchAvatar(handle: string, runner = spawnSync, opts: { retry?: 
   const file = `${base}.jpg`;
   const none = `${base}.none`;
 
-  const res = runner(shimPath("imsg"), avatarArgs(h), { timeout: 20000, maxBuffer: AVATAR_MAX_BYTES + (1 << 20) });
+  const bridge = bridgeFor(h, "imsg");
+  const res = runner(bridge.cmd, [...bridge.args, ...avatarArgs(h)], { timeout: 20000, maxBuffer: AVATAR_MAX_BYTES + (1 << 20) });
   if (res.status === 69 || res.status === 255) return { ok: false, url: "", error: "Mac unreachable" };
   const bytes = res.stdout as Buffer;
   // Only a real image is cached; anything else (an error string, a Core Data

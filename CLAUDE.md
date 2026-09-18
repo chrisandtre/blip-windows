@@ -19,6 +19,10 @@ treating a Mac as the gateway. Read this before touching anything.
                                     — single-quoted, expands on the MAC). `ssh -n` preflight; exit 69 offline.
                                     Blip only ever calls the shims via shimPath() (TS) or hostWidget.binDir
                                     (QML) — never a literal ~/bin path. No hostnames in code, ever.
+                                    A spawn about ONE conversation (thread, catch-up rows, read push,
+                                    avatar, file send, text send) asks source-id.ts which bridge answers:
+                                    bridgeFor() (TS) / SourceId.bridgeArgv() (QML). Stock Blip has one
+                                    source and every id resolves to the shim above, byte-identical (#70).
 contact-review.ts                   bounded read-only contact broker, view models, fingerprint cache.
 ContactReview.qml                   compact review and scan, opened from conversations.
 collector.ts                        poll → {threads, unread, toast}. Pure functions + one spawn.

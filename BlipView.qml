@@ -1,5 +1,6 @@
 import "SendState.mjs" as SendState
 import "MessageActions.mjs" as MessageActions
+import "SourceId.mjs" as SourceId
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -1509,7 +1510,9 @@ FocusScope {
     root.reloadTries = 0
     // Body on STDIN (--text-stdin), never argv: argv is readable by every
     // process on this machine and travels through ssh into the Mac's ps.
-    sendProc.command = [(hostWidget ? hostWidget.binDir : root.home + "/bin") + "/imsg-send"].concat(job.target).concat(["--yes", "--text-stdin", "--keep-dashes"])
+    // Which program sends is source-id.ts's answer for this conversation — in
+    // stock Blip always the Mac's imsg-send in bin_dir, exactly as before.
+    sendProc.command = SourceId.bridgeArgv(job.chat, "imsg-send", hostWidget ? hostWidget.binDir : root.home + "/bin").concat(job.target).concat(["--yes", "--text-stdin", "--keep-dashes"])
     sendProc.stdinEnabled = true
     sendProc.running = true
     sendProc.write(job.text)
