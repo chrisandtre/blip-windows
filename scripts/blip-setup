@@ -7,9 +7,10 @@
 #   1. ~/.config/blip/bridge.conf   host= (and remote_bin=, python=)
 #   2. ~/.ssh/config                 ControlMaster block for the host (47 ms warm
 #                                    round trips — Blip polls; this is required)
-#   3. ~/bin/{imsg,imsg-send,imsg-read,contacts}  the bridge shim (existing files backed up;
-#                                    claude-on-mac remote shims are left alone). bin_dir= in
-#                                    bridge.conf, or BLIP_BIN_DIR, installs them elsewhere
+#   3. ~/bin/{imsg,imsg-send,imsg-read,contacts,contact-save}  the bridge shim (existing
+#                                    files backed up; claude-on-mac remote shims are left
+#                                    alone). bin_dir= in bridge.conf, or BLIP_BIN_DIR,
+#                                    installs them elsewhere
 #   4. Mac install                   copies bridge/mac to the Mac and runs
 #                                    install.sh there (needs ssh access already)
 #   5. smoke test                    imsg recent 1 through the shim
@@ -71,7 +72,7 @@ kept=""
 [[ -r "$conf" ]] && kept="$(grep -vE '^[[:space:]]*(#|$|host=|remote_bin=|python=|key=|automation=|country_code=|bin_dir[[:space:]]*=)' "$conf" || true)"
 mkdir -p "$conf_dir"
 {
-  echo "# Blip bridge — read (never sourced) by the imsg, imsg-send, imsg-read, contacts shims"
+  echo "# Blip bridge — read (never sourced) by the imsg, imsg-send, imsg-read, contacts, contact-save shims"
   echo "host=$host"
   echo "# single-quoted on purpose: expanded on the MAC, not here"
   echo "remote_bin='\$HOME/.blip/bin'"
@@ -112,7 +113,7 @@ fi
 
 # 3. shims
 mkdir -p "$bin_dir"
-for t in imsg imsg-send imsg-read contacts; do
+for t in imsg imsg-send imsg-read contacts contact-save; do
   target="$bin_dir/$t"
   if [[ -e "$target" && ! -L "$target" ]] && ! grep -q "blip-shim" "$target" 2>/dev/null; then
     cp -p "$target" "$target.pre-blip.$(date +%s)"
@@ -120,7 +121,8 @@ for t in imsg imsg-send imsg-read contacts; do
   fi
   install -m 0755 "$here/bridge/linux/blip-shim" "$target"
 done
-echo "✓ shims installed in $bin_dir: imsg imsg-send imsg-read contacts"
+echo "✓ shims installed in $bin_dir: imsg imsg-send imsg-read contacts contact-save"
+echo "• Save contact helpers are included. Mac permission guide: $here/docs/SAVE-CONTACT.md"
 
 # The from= option for the Blip key's authorized_keys line. $1 = the address
 # this machine reached the Mac from. Over Tailscale that address is a stable

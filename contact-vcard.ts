@@ -9,6 +9,7 @@ import {pathToFileURL} from 'node:url';
 import {homedir} from 'node:os';
 import {shimPath} from './shim-path';
 import {normalizeHandle,identityKey,readStdinBounded} from './contact-review';
+import {shimPath} from './shim-path';
 const MAX_CARD_BYTES=2*1024*1024, MAX_RESPONSE_BYTES=3*1024*1024;
 const TOKEN=/^sha256:[0-9a-f]{64}$/;
 const FILE=/^contact-[0-9a-f]{32}\.vcf$/;

@@ -5,6 +5,7 @@ import {homedir} from 'node:os';
 import {join} from 'node:path';
 import {shimPath} from './shim-path';
 import {normalizeHandle, identityKey, readStdinBounded} from './contact-review';
+import {shimPath} from './shim-path';
 const MAX_BYTES = 48 * 1024;
 const TOKEN = /^sha256:[0-9a-f]{64}$/;
 const LABELS: Record<string,string> = {

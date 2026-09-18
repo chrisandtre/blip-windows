@@ -235,6 +235,15 @@ def _same_number(handle: Phone, card: Phone) -> bool:
     return False
 
 
+# Supported entry point. contact-save imports these two names to check a new
+# card against the numbers Contacts already holds, so they are a contract, not
+# an implementation detail: a sync-bridge.sh re-vendor that renames either
+# private function fails loudly here at import instead of silently turning
+# every regional duplicate check into "unavailable".
+parse_phone = _parse_phone
+same_number = _same_number
+
+
 def _card_name(first, last, org, nick) -> str:
     """The name a ZABCDRECORD row shows: first + last, else organisation, else nickname."""
     return " ".join(filter(None, [first, last])).strip() or org or nick or ""

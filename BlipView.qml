@@ -3936,6 +3936,7 @@ FocusScope {
     fontSize: root.fontBodySmall
     onClosed: root.focusDefault()
     onCopyRequested: function(text) { root.copyText(text) }
+    onContactSaved: if (root.hostWidget) root.hostWidget.refresh(true)
   }
 
   // Copy feedback must remain visible above contact review and other subviews.
