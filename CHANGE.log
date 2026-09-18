@@ -39,6 +39,8 @@ LAST X POST: CONTRIBUTORS-X-POST.md (2026-09-11). Everything below the
 marker for Post 2 is in the Post 2 draft in X-POSTS.md.
 ------------------------------------------------------------------------
 
+2026-09-18  #108 A read push counts the whole conversation cluster, not one chat row (fixes #107): an unread on an alias silently never pushed.
+                 Ian Swope, github.com/ianswope, X: none verified
 2026-09-18  #91  Save a NEW contact to the Mac from a conversation: create-only, confirmed, duplicate-refusing, verified by read-back.
                  Kb2uka, github.com/Kb2uka, X: none found (checked 2026-09-18, asked on the PR)
 2026-09-18  #106 A group read in Blip clears it on the Mac too, through Messages' imessage:open?groupid= deep link.

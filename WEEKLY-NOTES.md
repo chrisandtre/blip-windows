@@ -27,7 +27,7 @@ reconstructed on Sunday from memory.
 
 ## 2026-W38 (Mon 14 Sep to Sun 20 Sep): OPEN, post due Sun 20 Sep
 
-19 PRs merged so far, from 6 people.
+25 PRs merged so far, from 8 people.
 
 ### Mon 15 Sep: ten merges, the Codex-audit backlog cleared
 
@@ -137,6 +137,14 @@ reconstructed on Sunday from memory.
   guard test missed it because its regex matched only double quotes and two
   tool names. Fixed and widened on main (4134bbf), separately from his PR, so
   the fix is not waiting on a feature review.
+
+- **#108 a read push counts the whole conversation, not one chat row.** Ian
+  Swope. imsg-read verified with an exact match on one chat row, but Messages
+  splits a conversation across rows: with the unread on an alias it printed
+  "nothing unread" and silently never pushed, and settle() agreed. This is our
+  own cluster invariant that the verification was not following, and it sits
+  directly on #102's "the count is the referee". Not reproducible on our own
+  Mac (no identifier there currently has more than one row); his tests carry it.
 
 ### Waiting on people, Fri 18 Sep
 - **#103** Damon Janis, https://x.com/damonjanis: CI failed on a GitHub 504
