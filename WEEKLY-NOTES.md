@@ -110,6 +110,46 @@ reconstructed on Sunday from memory.
 - **#99 CLAUDE.md records rank-then-size for contact sources.** Ian Swope,
   catching our own note going stale the same day the code changed.
 
+### Fri 18 Sep: four merges, one fix of ours
+
+- **#104 one Linux-shim line in the shape diagram.** Ian Swope (no verified X
+  handle). Our own bin_dir merge left two versions of the same line, one
+  already stale. He caught it the same day.
+- **#106 a group read reaches the Mac.** Jon Kinney, https://x.com/jondkinney.
+  Per-thread read push was DMs only because a group id has no `imessage://`
+  form. Messages has a second deep link, `imessage:open?groupid=`, so a group
+  read in Blip now clears on the phone with `push_read=thread`. This overturns
+  our own "a group cannot be addressed at all" note. VERIFIED LIVE here on
+  macOS 27 before merging: opened a real group by URL and read back Messages'
+  front window title, which was the group's participant list, then restored the
+  front app. Not tested end to end, because that marks a real conversation read
+  on a live account.
+- **#105 a source-routing seam, and nothing else changes.** David Reinecke
+  (github dreinecke, no verified X handle). Every per-conversation spawn asks
+  which bridge answers for that id; stock Blip has one source and resolves
+  exactly as before, pinned by tests. Fred agreed to the seam alone on #70 with
+  the contributor's second messenger staying in his fork. Checked here:
+  SourceId.mjs is byte-identical to a fresh build of source-id.ts, and a live
+  collector run on the branch gave the same counts as main.
+- **bin_dir= really moves every shim now.** Found by Kb2uka (github, no
+  verified handle) while rebasing #91: exact-card details and vCard export
+  still called ~/bin/contacts directly, so moving the shims broke both. The
+  guard test missed it because its regex matched only double quotes and two
+  tool names. Fixed and widened on main (4134bbf), separately from his PR, so
+  the fix is not waiting on a feature review.
+
+### Waiting on people, Fri 18 Sep
+- **#103** Damon Janis, https://x.com/damonjanis: CI failed on a GitHub 504
+  downloading bun, nothing to do with his code; re-triggered. Now conflicts
+  with #106 in the same helper, so it needs a rebase. Fred answered his open
+  question: the badge counts unread CONVERSATIONS, as he proposed.
+- **#91** Kb2uka: saving new contacts to the Mac. Reviewed; the write question
+  is Fred's, below.
+- **#83** Zach Wilke, https://x.com/zachwilke_1: no movement since 15 Sep,
+  still conflicting with an unanswered review. Nudged, offered to close it.
+- **#25** Jon Kinney: gated contact writes, still a draft; Fred's full review
+  is on the PR and the delete path is refused.
+
 ### Ours this week, for context in the post, not credit
 - Blip 2.5.0 shipped Sun 13 Sep.
 - A waiting Send Later message showed as already sent and became a

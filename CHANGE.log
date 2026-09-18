@@ -39,6 +39,14 @@ LAST X POST: CONTRIBUTORS-X-POST.md (2026-09-11). Everything below the
 marker for Post 2 is in the Post 2 draft in X-POSTS.md.
 ------------------------------------------------------------------------
 
+2026-09-18  #106 A group read in Blip clears it on the Mac too, through Messages' imessage:open?groupid= deep link.
+                 Jon Kinney, github.com/jondkinney, X https://x.com/jondkinney
+2026-09-18  #105 Per-conversation spawns route through a source-id seam; stock Blip still resolves to the one Mac bridge (closes #70).
+                 David Reinecke, github.com/dreinecke, X: none found (checked 2026-09-18)
+2026-09-18  #104 One Linux-shim line in the shape diagram, listing all four shims.
+                 Ian Swope, github.com/ianswope, X: none verified
+2026-09-18  4134bbf  Exact-card details and vCard export honour bin_dir; the guard test that missed it is widened.
+                 Found by Kb2uka, github.com/Kb2uka, X: none found (checked 2026-09-18). Fixed by Fred Nix / Larry, X https://x.com/nixfred
 2026-09-17  #96  prefer_imessage=on keeps a mixed 1:1 on iMessage instead of going green after one RCS inbound. Opt-in, off by default.
                  Baden, github.com/bpiland, X https://x.com/bhp35
 2026-09-17  #101 A read dot no longer returns while the badge says zero: the poll no-op check follows the model, not a stale cache.
