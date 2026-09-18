@@ -143,8 +143,13 @@ reconstructed on Sunday from memory.
   downloading bun, nothing to do with his code; re-triggered. Now conflicts
   with #106 in the same helper, so it needs a rebase. Fred answered his open
   question: the badge counts unread CONVERSATIONS, as he proposed.
-- **#91** Kb2uka: saving new contacts to the Mac. Reviewed; the write question
-  is Fred's, below.
+- **#91 MERGED** Kb2uka (no verified handle, asked on the PR): saving a NEW
+  contact to the Mac. Breaks our "nothing is ever written to Contacts"
+  invariant, so Fred decided it after a full read of the write path: create
+  only (no delete or modify path exists in the helper), duplicate-refusing,
+  reads the card back before reporting success, handle must match the saved
+  identity, fields on stdin, fails closed without the Contacts grant. Not
+  exercised live: creating a real contact needs the prompt answered at the Mac.
 - **#83** Zach Wilke, https://x.com/zachwilke_1: no movement since 15 Sep,
   still conflicting with an unanswered review. Nudged, offered to close it.
 - **#25** Jon Kinney: gated contact writes, still a draft; Fred's full review

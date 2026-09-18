@@ -39,6 +39,8 @@ LAST X POST: CONTRIBUTORS-X-POST.md (2026-09-11). Everything below the
 marker for Post 2 is in the Post 2 draft in X-POSTS.md.
 ------------------------------------------------------------------------
 
+2026-09-18  #91  Save a NEW contact to the Mac from a conversation: create-only, confirmed, duplicate-refusing, verified by read-back.
+                 Kb2uka, github.com/Kb2uka, X: none found (checked 2026-09-18, asked on the PR)
 2026-09-18  #106 A group read in Blip clears it on the Mac too, through Messages' imessage:open?groupid= deep link.
                  Jon Kinney, github.com/jondkinney, X https://x.com/jondkinney
 2026-09-18  #105 Per-conversation spawns route through a source-id seam; stock Blip still resolves to the one Mac bridge (closes #70).

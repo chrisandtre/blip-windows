@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Save an unknown sender as a contact.** Review the sender, type a name,
+  confirm the fields, and a new card is created in Contacts on the Mac. It only
+  ever creates: there is no edit and no delete. It refuses when a matching
+  contact already exists, reads the saved card back and compares it before
+  reporting success, and needs the conversation's own handle to be the phone or
+  email you are saving. Requires Contacts access on the Mac, which it asks for
+  the first time you use it; without it the feature reports unavailable and
+  nothing is written. Re-run `blip-setup` so the Mac gets the new tool. See
+  docs/SAVE-CONTACT.md. Thanks @Kb2uka (#91).
 - **`bin_dir=` really moves every shim now.** Exact-card details and vCard
   export still called `~/bin/contacts` directly, so with the shims moved
   elsewhere both features failed while everything around them worked. Found by
