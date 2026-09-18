@@ -12,6 +12,14 @@
   the URL fails or Messages has no window, and puts the app you were using
   back in front afterwards. Default policy is still `all`. Re-run `blip-setup`
   so the Mac picks up the new `imsg-read`. Thanks @jondkinney (#106).
+- **A source-routing seam, and nothing else changes.** Every spawn that is about
+  one conversation — loading a thread, catch-up rows, a read push, an avatar, a
+  file send and a text send — now asks `source-id.ts` which bridge answers for
+  that conversation id. Stock Blip has exactly one source, the Mac, and every id
+  resolves to the same shim in `bin_dir` with the same arguments as before, which
+  the tests pin. It exists so a fork can add a second messenger by adding one
+  entry to `EXTRA_SOURCES`; iMessage remains the only source Blip ships, tests
+  and supports (#70).
 - **`bin_dir=` in `bridge.conf`.** The Linux-side shims (`imsg`, `imsg-send`,
   `imsg-read`, `contacts`) no longer have to live in `~/bin`. Set
   `bin_dir=~/.local/bin` (or any plain absolute path; `~` and `$HOME` expand)

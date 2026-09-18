@@ -17,7 +17,7 @@
  *   bun collector.ts --read <chat>      # clear one thread's dot (opened it)
  */
 
-import { shimPath } from "./shim-path";
+import { bridgeFor, shimPath } from "./shim-path";
 import { openSync, writeSync, fsyncSync, closeSync } from "node:fs";
 import { homedir } from "node:os";
 import { spawn, spawnSync } from "node:child_process";
@@ -1112,7 +1112,9 @@ export function pushReadArgs(
 export function pushRead(args: string[] | null, home = HOME): void {
   if (!args) return;
   try {
-    const child = spawn("sh", pushReadCommand(shimPath("imsg-read", home), args, pushReadLogPath(home)),
+    // "--chat X" goes to whichever source owns X; "--all" names no conversation.
+    const bridge = bridgeFor(args[0] === "--chat" ? String(args[1] || "") : "", "imsg-read", home);
+    const child = spawn("sh", pushReadCommand(bridge.cmd, [...bridge.args, ...args], pushReadLogPath(home)),
       { detached: true, stdio: "ignore" });
     child.unref();
   } catch { /* no shim, no Mac, no matter */ }
@@ -1354,7 +1356,8 @@ export function fetchChatRows(
   limit = CATCHUP_CHAT_ROWS,
   runner = spawnSync,
 ): FetchResult {
-  const res = runner(shimPath("imsg"), ["--json", "thread", "--chat", chat, String(limit)], {
+  const bridge = bridgeFor(chat, "imsg");
+  const res = runner(bridge.cmd, [...bridge.args, "--json", "thread", "--chat", chat, String(limit)], {
     encoding: "utf8",
     timeout: 15000, maxBuffer: 64 * 1024 * 1024,
   });

@@ -10,7 +10,7 @@
  *   bun thread.ts <chat-id> [limit]
  */
 
-import { shimPath } from "./shim-path";
+import { bridgeFor } from "./shim-path";
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -552,7 +552,8 @@ export function loadThread(
   // window (war room #14). A DM's chat_identifier IS the handle.
   const group = isGroupChat(chat);
   const args = ["--json", "--rich", "thread", "--chat", chat, String(limit)];
-  const res = runner(shimPath("imsg"), args, {
+  const bridge = bridgeFor(chat, "imsg");
+  const res = runner(bridge.cmd, [...bridge.args, ...args], {
     encoding: "utf8",
     timeout: 15000, maxBuffer: 64 * 1024 * 1024,
   });
