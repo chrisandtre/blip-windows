@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Reading a group in Blip can now clear it on your phone too.** Per-thread
+  read push was DMs only, because a group's identifier has no `imessage://`
+  form. Messages accepts its own deep link instead, `imessage:open?groupid=`,
+  so with `push_read=thread` a group you read here is marked read on the Mac
+  like any DM. The bridge addresses the group by its opaque identifier and
+  never by whoever spoke last, serialises Messages selection and menu clicks
+  behind an owner-only lock so two reads cannot cross, refuses to click when
+  the URL fails or Messages has no window, and puts the app you were using
+  back in front afterwards. Default policy is still `all`. Re-run `blip-setup`
+  so the Mac picks up the new `imsg-read`. Thanks @jondkinney (#106).
 - **`bin_dir=` in `bridge.conf`.** The Linux-side shims (`imsg`, `imsg-send`,
   `imsg-read`, `contacts`) no longer have to live in `~/bin`. Set
   `bin_dir=~/.local/bin` (or any plain absolute path; `~` and `$HOME` expand)

@@ -762,10 +762,11 @@ had in front.
 `push_read` in `bridge.conf` takes three values, and the default surprises
 people: **`all`** (the default) pushes *only* on the mark-all gesture, so
 reading one conversation in Blip clears its dot here and leaves your iPhone's
-badge alone. **`thread`** also pushes each conversation you open — DMs only,
-since a group has no `imessage://` form — at the cost of bringing Messages to
-the front on the Mac, because aiming that menu at one conversation means
-opening it. **`off`** keeps the Mac out of it entirely. `qs ipc call
+badge alone. **`thread`** also pushes each unread conversation you read, including groups.
+It briefly brings Messages forward on the Mac, then restores the previous app.
+Groups are addressed by their identifier, never their name or last speaker.
+Messages in iCloud must be enabled on your devices for Apple to propagate
+that read state; your Messages read-receipt settings still apply. **`off`** keeps the Mac out of it entirely. `qs ipc call
 nixfred.blip status` reports the live value as `read_push=`. Every push records
 its outcome in `~/.local/state/blip/push-read.log` (no message content), so
 "did that reach the Mac?" has an answer.

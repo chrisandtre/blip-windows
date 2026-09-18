@@ -52,7 +52,8 @@ what it is handed. Keep it that way.
   and the blue dots). Collapsing them makes the badge flash and reset.
 - **Unread = BOTH sides agree** (1.3.2): Apple-side `is_read`=0 (imsg ≥1.9.0
   `read`; phone-synced via Messages in iCloud) AND newer than the local mark.
-  Phone-read clears Blip within a poll; Blip-read clears locally only.
+  Phone-read clears Blip within a poll; Blip-read also reaches the Mac when
+  `push_read=thread` is enabled (DMs and groups, through Messages, never SQL writes).
   Tapback rows and the self-thread never count (no Apple client badges them).
   chat.db carries GHOST is_read=0 rows years old — never trust is_read alone.
 - **Read marks are per-chat, clamped to now, and --seen-based.** A message

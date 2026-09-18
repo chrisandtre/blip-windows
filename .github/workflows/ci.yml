@@ -40,6 +40,8 @@ jobs:
         run: python3 bridge/mac/test_cluster.py
       - name: the optional read-push probe stays opt-in (no macOS needed)
         run: python3 bridge/mac/test_blip_check.py
+      - name: read pushes address groups and restore focus (no macOS needed)
+        run: python3 bridge/mac/test_read.py
       - name: hide Spam / unknown senders (no macOS needed)
         run: python3 bridge/mac/test_filtered.py
       - name: contact review across sources (no macOS needed)

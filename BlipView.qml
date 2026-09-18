@@ -2315,9 +2315,8 @@ FocusScope {
                 foreground: root.foreground
                 fontFamily: root.fontFamily
               }
-              // Local only: moves readMark/readMarks in state.json so the
-              // badge and dots clear. Nothing is written back to the Mac —
-              // AppleScript cannot flip is_read (see "not possible" in CLAUDE.md).
+              // Clear local marks and, unless push_read=off, ask Messages
+              // on the Mac to mark its conversations read too.
               // TapHandler, not MouseArea: the thread rows' proven pattern —
               // the MouseArea version could lose clicks to the dismiss layer.
               Text {
