@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **`bin_dir=` really moves every shim now.** Exact-card details and vCard
+  export still called `~/bin/contacts` directly, so with the shims moved
+  elsewhere both features failed while everything around them worked. Found by
+  @Kb2uka while rebasing #91, along with the reason our guard test missed it:
+  it matched only double-quoted paths and two of the tool names.
 - **Reading a group in Blip can now clear it on your phone too.** Per-thread
   read push was DMs only, because a group's identifier has no `imessage://`
   form. Messages accepts its own deep link instead, `imessage:open?groupid=`,

@@ -3,6 +3,7 @@
 import {spawnSync} from 'node:child_process';
 import {homedir} from 'node:os';
 import {join} from 'node:path';
+import {shimPath} from './shim-path';
 import {normalizeHandle, identityKey, readStdinBounded} from './contact-review';
 const MAX_BYTES = 48 * 1024;
 const TOKEN = /^sha256:[0-9a-f]{64}$/;
@@ -21,7 +22,7 @@ function text(value: unknown, max: number): string {
 export function cardDetails(request: any, runner = spawnSync) {
   const handle = normalizeHandle(request?.handle);
   if (typeof request?.token !== 'string' || !TOKEN.test(request.token)) throw new Error('Invalid contact card token');
-  const result = runner(join(process.env.HOME ?? homedir(),'bin','contacts'),['--json','resolve'], {
+  const result = runner(shimPath('contacts'),['--json','resolve'], {
     input:JSON.stringify({operation:'details',handle,token:request.token}),encoding:'utf8',timeout:35000,maxBuffer:MAX_BYTES,
   });
   if (result.error) throw new Error('Could not read contact details');

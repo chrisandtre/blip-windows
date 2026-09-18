@@ -7,6 +7,7 @@ import {closeSync,constants,fstatSync,openSync,writeSync,mkdirSync,opendirSync,l
 import {join,isAbsolute,basename} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {homedir} from 'node:os';
+import {shimPath} from './shim-path';
 import {normalizeHandle,identityKey,readStdinBounded} from './contact-review';
 const MAX_CARD_BYTES=2*1024*1024, MAX_RESPONSE_BYTES=3*1024*1024;
 const TOKEN=/^sha256:[0-9a-f]{64}$/;
@@ -88,7 +89,7 @@ export function writeVcard(bytes:Buffer,runtimeRoot:string,shortName:unknown='Co
 function fetchContactVcard(request:any,runner:typeof spawnSync) {
   const handle=normalizeHandle(request?.handle),token=request?.token;
   if(typeof token!=='string' || !TOKEN.test(token)) throw new Error('Invalid contact card token');
-  const result=runner(join(process.env.HOME??homedir(),'bin','contacts'),['--json','resolve'], {
+  const result=runner(shimPath('contacts'),['--json','resolve'], {
     encoding:'utf8',input:JSON.stringify({operation:'vcard',handle,token}),timeout:35000,maxBuffer:MAX_RESPONSE_BYTES,
   });
   if(result.error || result.status!==0) throw new Error('Could not export the contact vCard');
