@@ -175,6 +175,15 @@ reconstructed on Sunday from memory.
   12:00am. Our miss, not a contributor's: a bridge change has to reach every
   client in the same step.
 
+- **The app window opens where you are (1b148f8, ours).** Blip's home-workspace
+  restore (#87) claimed a home from wherever the window first landed and then
+  restored onto it even when that workspace was gone, so Hyprland created it and
+  moved the reader there; plonk renumbered it underneath. Now only a deliberate
+  move claims a home, and a dead home is ignored. Traced on Hyprland's event
+  socket, which is the quickest way to see this class of bug. Not a contributor
+  issue, and worth a line in the post because anyone running a workspace
+  compactor would hit it.
+
 ### Handles Fred still needs to answer (asked 2026-09-18)
 - **Ian Swope** (github.com/ianswope), 12 merged PRs, the most of anyone this
   week. Nothing published; @IanSwope on X carries his name but is dormant with
