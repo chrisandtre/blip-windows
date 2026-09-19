@@ -1,5 +1,6 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
+  workspaceLives,
   homeRule,
   isLiveBlipTitle,
   luaString,
@@ -51,7 +52,11 @@ test("a remap or monitor churn returns home; a user move is the new home", () =>
   expect(workspaceDecision("2", "5", "report")).toBe("ignore");
   expect(workspaceDecision("2", "5", "move")).toBe("save");
   expect(workspaceDecision("2", "2", "map")).toBe("ignore");
-  expect(workspaceDecision("", "5", "map")).toBe("save");
+  // With no home yet, only a deliberate move claims one: a map must not make
+  // wherever the window landed its home (2026-09-19).
+  expect(workspaceDecision("", "5", "move")).toBe("save");
+  expect(workspaceDecision("", "5", "map")).toBe("ignore");
+  expect(workspaceDecision("", "5", "monitor")).toBe("ignore");
   expect(workspaceDecision("", "5", "report")).toBe("ignore");
   expect(workspaceDecision("2", "", "move")).toBe("ignore");
 });
@@ -65,4 +70,23 @@ test("silent return requires a real address and a real workspace", () => {
   expect(lua).toContain(`window = ${luaString("address:0x1234abcd")}`);
   expect(silentMove("2", "not-an-address")).toBeNull();
   expect(silentMove("", "0x1234abcd")).toBeNull();
+});
+
+describe("a home workspace that no longer exists", () => {
+  const live = [{ id: 1, name: "1" }, { id: 4, name: "4" }, { id: 7, name: "work" }];
+  test("an id or name still on screen is alive", () => {
+    expect(workspaceLives("4", live)).toBe(true);
+    expect(workspaceLives("work", live)).toBe(true);
+  });
+  test("a workspace that is gone is not restored to", () => {
+    // plonk renumbers, empty workspaces disappear: restoring here would CREATE
+    // workspace 6 and drag the reader to it.
+    expect(workspaceLives("6", live)).toBe(false);
+  });
+  test("an unreadable workspace list keeps the home rather than dropping it", () => {
+    expect(workspaceLives("6", null)).toBe(true);
+  });
+  test("no saved home is not a live one", () => {
+    expect(workspaceLives("", live)).toBe(false);
+  });
 });

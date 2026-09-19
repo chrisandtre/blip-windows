@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **The app window opens where you are.** Blip remembers a home workspace so
+  the window goes back there after the screen idles off, but it claimed that
+  home from wherever the window happened to land, and then restored onto it
+  even when that workspace no longer existed: Hyprland created it and took you
+  there. With a workspace compactor running (empty workspaces disappear and the
+  rest are renumbered) that turned Super+M into a window that opened, flew to
+  another workspace, resized and vanished. Now only a deliberate move claims a
+  home, and a home that no longer exists is ignored rather than recreated.
 - **Save an unknown sender as a contact.** Review the sender, type a name,
   confirm the fields, and a new card is created in Contacts on the Mac. It only
   ever creates: there is no edit and no delete. It refuses when a matching

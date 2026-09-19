@@ -90,7 +90,8 @@ FloatingWindow {
   // Keep in lockstep with workspaceDecision() in window-restore.ts.
   function workspaceDecision(incoming, reason) {
     if (!incoming) return "ignore"
-    if (savedWorkspace === "") return reason === "report" ? "ignore" : "save"
+    // Lockstep with window-restore.ts: only a deliberate move claims a home.
+    if (savedWorkspace === "") return reason === "move" ? "save" : "ignore"
     if (incoming === savedWorkspace) return "ignore"
     if (reason === "move") return "save"
     if (reason === "map" || reason === "monitor") return "return"

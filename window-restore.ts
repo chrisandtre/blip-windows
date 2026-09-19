@@ -29,7 +29,12 @@ export function workspaceDecision(saved: unknown, incoming: unknown, reason: Wor
   const next = typeof incoming === "string" ? incoming : "";
   const home = typeof saved === "string" ? saved : "";
   if (!next || /[\x00-\x1f\x7f]/.test(next)) return "ignore";
-  if (!home) return reason === "report" ? "ignore" : "save";
+  // An empty home is claimed by a DELIBERATE move only. Claiming it on a map
+  // made wherever the window happened to land its home for good, which with a
+  // stale compositor rule (they outlive the plugin, only a reload clears them)
+  // meant Super+M opened the app on a workspace the reader was not on, every
+  // time (2026-09-19).
+  if (!home) return reason === "move" ? "save" : "ignore";
   if (next === home) return "ignore";
   if (reason === "move") return "save";
   if (reason === "map" || reason === "monitor") return "return";
@@ -52,6 +57,28 @@ export function silentMove(workspace: unknown, address: unknown): string | null 
   const addr = windowAddress(address);
   if (!target || !addr) return null;
   return `hl.dsp.window.move({ workspace = ${luaString(target)}, follow = false, window = ${luaString("address:" + addr)} })`;
+}
+
+/**
+ * Does that workspace still exist? A home saved by name or id can outlive the
+ * workspace itself: an empty workspace disappears, and a compactor like plonk
+ * renumbers the ones that remain. Restoring onto a dead id does not find the
+ * old place, it CREATES a workspace and drags the reader to it, which on
+ * 2026-09-19 looked like the window opening, flying off, resizing and vanishing
+ * (it then got renumbered under the window). Unknown or unreadable: treat as
+ * alive, so a hyprctl hiccup cannot silently drop a real home.
+ */
+export function workspaceLives(workspace: unknown, live: unknown): boolean {
+  const target = typeof workspace === "string" ? workspace : "";
+  if (!target) return false;
+  if (!Array.isArray(live)) return true;
+  return live.some((w: any) => String(w?.name ?? "") === target || String(w?.id ?? "") === target);
+}
+
+function liveWorkspaces(): unknown {
+  const result = spawnSync("hyprctl", ["workspaces", "-j"], { encoding: "utf8", timeout: 3000 });
+  if (result.status !== 0) return null;
+  try { return JSON.parse(String(result.stdout)); } catch { return null; }
 }
 
 function hyprEval(lua: string): boolean {
@@ -82,7 +109,9 @@ if (import.meta.main) {
     process.exit(0);
   }
 
-  const workspace = action === "prepare" ? process.argv[3] : action;
+  const asked = action === "prepare" ? process.argv[3] : action;
+  // A home that no longer exists is not a home. Opening here beats creating it.
+  const workspace = workspaceSelector(asked) && !workspaceLives(asked, liveWorkspaces()) ? "" : asked;
   const title = `Blip-restore-${randomUUID()}`;
   if (!hyprEval(restoreRule(workspace, title))) {
     console.error("Blip could not prepare quiet window restoration");
