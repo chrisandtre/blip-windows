@@ -146,6 +146,23 @@ reconstructed on Sunday from memory.
   directly on #102's "the count is the referee". Not reproducible on our own
   Mac (no identifier there currently has more than one row); his tests carry it.
 
+### Fri 19 Sep: one merge
+
+- **#110 the security code fills in Zen and Firefox.** joshhattan (github, no
+  handle published; asked on the PR how he wants to be credited). Clicking
+  "Fill code" in Zen did nothing and said nothing: Gecko's accessibility layer
+  returns success from `set_text_contents()` and writes nothing, and the helper
+  returned straight after the call without ever reading the field back. It now
+  re-reads, and types the code through the same Hyprland key path Chromium
+  already uses when the field is still empty; a write that did land keeps the
+  early return, so the digits are never entered twice. Verified here on the
+  merge: 621 bun tests and 8 python tests green, and his new fallback test
+  fails on main without the change. NOT reproduced on our own screen, because
+  neither Zen nor Firefox is the browser here; his evidence is a live sign-in
+  page in Zen 1.22.2b plus a test page counting `input` events. One thing left
+  open for him: Gecko's write is synchronous, so a late-landing write plus the
+  typed keys would double the code, and nothing re-checks between the two.
+
 ### Waiting on people, Fri 18 Sep
 - **#103** Damon Janis, https://x.com/damonjanis: CI failed on a GitHub 504
   downloading bun, nothing to do with his code; re-triggered. Now conflicts
@@ -193,6 +210,9 @@ reconstructed on Sunday from memory.
 - **cw228** (#100), **Kb2uka** (#90, #91) and **cjoh** (reported #86): asked on
   their own PRs/issue 2026-09-18 how they want to be credited, with "rather not
   be tagged" offered as an equally good answer. Waiting.
+- **joshhattan** (#110, merged 19 Sep): nothing published at all, not even a
+  real name (the GitHub profile name is "kj3h4g5"). Asked on the PR. Fred's
+  call 2026-09-19 was to log "none found" and revisit at post time.
 - **tolewis**, **jacobaross**, **apexbenny**,
   **dreinecke**, **znayer**, **Erik Fillipsveen**: nothing published, and Erik
   is the largest contributor to the project overall.
