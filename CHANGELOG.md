@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **`SUPER+CTRL+<n>` opens the Blip popout on a multi-monitor bar.** Omarchy
+  sends a panel hotkey to the widget on the focused screen, but only the
+  leader (first screen) owns a panel, so on any other screen `open()` did
+  nothing — silently, no `summon:` warning, the shell counts it as success.
+  A follower now forwards to the leader by IPC the way a click on its icon
+  does, through a new open-only verb `openon <screen>` (a hotkey that means
+  "open" must not close an open panel, which `toggleon` would), and the
+  leader re-anchors to the asked-for screen so the popout appears under the
+  focused bar instead of wherever it was last anchored. `close()` on a
+  follower forwards too.
 - **Security-code autofill fills in Zen and Firefox.** "Fill code" did nothing
   there: Gecko's accessibility layer reports success from `set_text_contents`
   but writes nothing, and the helper never checked, so the failure was silent.
@@ -108,7 +118,6 @@
   `bridge.conf`. A successful iMessage anywhere in the loaded window wins, a
   never-iMessage green thread stays green, and a failed iMessage to a phone
   still flips to SMS. Off by default. Groups still send by chat id.
-
 - **A Send Later message shows as Scheduled, not sent.** Messages writes a
   scheduled message into chat.db the moment you queue it, dated at the time it
   will go out. Blip showed it as already sent, made it the conversation's

@@ -100,9 +100,53 @@ BarWidget {
   // close() AND this property — without it the shell logs "summon: no live
   // bar widget" and does nothing. Same line as Omarchy's clock widget.
   readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
-  function open() { if (panelLoader.item) panelLoader.item.open() }
-  function close() { if (panelLoader.item) panelLoader.item.close() }
-  function toggle() { if (panelLoader.item) panelLoader.item.toggle() }
+  // Omarchy picks the copy on the FOCUSED screen for a hotkey, and only the
+  // leader owns a panel. A follower used to do nothing here — silently, so no
+  // "summon:" warning — and the leader opened wherever it was last anchored.
+  // Both now go through openOn(): the leader re-anchors to the asked-for
+  // screen, a follower forwards by IPC exactly like a click on its icon does.
+  function open() { root.openOn(root.ownScreen ? String(root.ownScreen.name) : "") }
+  function close() {
+    if (panelLoader.item) panelLoader.item.close()
+    else if (!root.leader) Quickshell.execDetached(["qs", "-p", "/usr/share/omarchy/shell", "ipc", "call", root.moduleName, "close"])
+  }
+  function toggle() { root.toggleOn("") }
+  property alias anchorButton: button
+  // The panel exists only on the leader, so a click on another screen's bar
+  // arrives here by IPC. Re-anchor the panel to the clicked bar's button (the
+  // popout takes its screen from its anchor) or it always opens on the
+  // leader's screen. Empty/unknown screen anchors to this widget's own button.
+  function widgetOnScreen(name) {
+    var list = root.bar && typeof root.bar.moduleWidgets === "function" ? root.bar.moduleWidgets(root.moduleName) : []
+    for (var i = 0; i < list.length; i++) {
+      var s = list[i] ? list[i].ownScreen : null
+      if (s && list[i].anchorButton && String(s.name) === String(name)) return list[i]
+    }
+    return root
+  }
+  function anchorPanel(p, screenName) {
+    var w = root.widgetOnScreen(screenName)
+    p.bar = w.bar
+    p.anchorItem = w.anchorButton
+  }
+  function toggleOn(screenName) {
+    var p = panelLoader.item
+    if (!p) return
+    if (!p.opened) root.anchorPanel(p, screenName)
+    p.toggle()
+  }
+  // Open-only sibling of toggleOn: a hotkey that means "open" must never close
+  // a panel that is already up. An open panel stays where it is.
+  function openOn(screenName) {
+    if (!root.leader) {
+      Quickshell.execDetached(["qs", "-p", "/usr/share/omarchy/shell", "ipc", "call", root.moduleName, "openon", screenName])
+      return
+    }
+    var p = panelLoader.item
+    if (!p) return
+    if (!p.opened) root.anchorPanel(p, screenName)
+    p.open()
+  }
   /** Open a conversation by chat id. Returns false when the id is not one —
    *  `goto ""` used to open a nameless thread with no header that nothing
    *  could send to, and a script with an unset variable is how you get there.
@@ -236,7 +280,7 @@ BarWidget {
       // a follower bar: ask the leader (only it answers IPC)
       if (dblClick.running) { dblClick.stop(); Quickshell.execDetached(["qs", "-p", "/usr/share/omarchy/shell", "ipc", "call", root.moduleName, "app"]); return }
       dblClick.restart()
-      Quickshell.execDetached(["qs", "-p", "/usr/share/omarchy/shell", "ipc", "call", root.moduleName, "toggle"])
+      Quickshell.execDetached(["qs", "-p", "/usr/share/omarchy/shell", "ipc", "call", root.moduleName, "toggleon", root.ownScreen ? String(root.ownScreen.name) : ""])
       return
     }
     if (dblClick.running) {
@@ -885,6 +929,8 @@ BarWidget {
     function open(): void { root.open() }
     function close(): void { root.close() }
     function toggle(): void { root.toggle() }
+    function toggleon(screen: string): void { root.toggleOn(screen) }
+    function openon(screen: string): void { root.openOn(screen) }
     function goto(chat: string): string { if (!root.automationOn) return root.automationOff; return root.show(chat) ? "shown" : "not a conversation id" }
     function copycode(): string { if (!root.automationOn) return root.automationOff; return root.copyCode() }
     function typecode(): string { if (!root.automationOn) return root.automationOff; return root.typeCode() }

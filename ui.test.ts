@@ -400,6 +400,26 @@ describe("QML safety invariants", () => {
     expect(widget).toContain("function close() {");
   });
 
+  test("a panel hotkey on a follower screen reaches the leader's panel", () => {
+    // The shell hands the hotkey to the widget on the FOCUSED screen; only the
+    // leader owns a panel. A no-op open() on a follower is silent (the shell
+    // still reports success), so open() must route through openOn(), which
+    // forwards to the leader by an open-only verb — toggleon would close an
+    // already-open panel — and re-anchors to the asked-for screen.
+    expect(widget).toContain("function open() { root.openOn(");
+    const openOn = widget.slice(widget.indexOf("function openOn("));
+    const body = openOn.slice(0, openOn.indexOf("\n  }") + 4);
+    expect(body).toContain("if (!root.leader)");
+    expect(body).toContain('"openon", screenName');
+    expect(body).toContain("root.anchorPanel(p, screenName)");
+    expect(body).toContain("p.open()");
+    expect(body).not.toContain("p.toggle()");
+    expect(widget).toContain("function openon(screen: string): void { root.openOn(screen) }");
+    // close() on a follower forwards too instead of doing nothing.
+    const close = widget.slice(widget.indexOf("function close() {"));
+    expect(close.slice(0, close.indexOf("\n  }") + 4)).toContain('"ipc", "call", root.moduleName, "close"');
+  });
+
   test("keys and wheel scroll the conversation through one stick-aware helper", () => {
     // Two writers of flick.contentY would drift on the bottom-stick, which
     // gates the deferred push reload; the wheel handler must go through it.
