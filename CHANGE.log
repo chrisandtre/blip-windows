@@ -39,6 +39,10 @@ LAST X POST: CONTRIBUTORS-X-POST.md (2026-09-11). Everything below the
 marker for Post 2 is in the Post 2 draft in X-POSTS.md.
 ------------------------------------------------------------------------
 
+2026-09-19  #109 Manual window moves stick, and the popout opens on the screen whose icon you clicked: the window's 0x-prefixed
+                 address never matched Hyprland's bare-hex event, so every deliberate move was undone as a stray remap; and a
+                 follower bar's click now carries its screen (toggleon/openon) so the panel re-anchors there, including SUPER+CTRL+<n>.
+                 joshhattan, github.com/joshhattan, X: none found (checked 2026-09-19, asked on the PR)
 2026-09-19  #110 The security code fills in Zen and Firefox: Gecko reports success from set_text_contents and writes nothing, so the
                  helper re-reads the field and types the code through the same Hyprland key path Chromium already uses.
                  joshhattan, github.com/joshhattan, X: none found (checked 2026-09-19, asked on the PR)

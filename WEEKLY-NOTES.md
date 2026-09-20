@@ -27,7 +27,7 @@ reconstructed on Sunday from memory.
 
 ## 2026-W38 (Mon 14 Sep to Sun 20 Sep): OPEN, post due Sun 20 Sep
 
-25 PRs merged so far, from 8 people.
+27 PRs merged so far, from 8 people.
 
 ### Mon 15 Sep: ten merges, the Codex-audit backlog cleared
 
@@ -146,7 +146,7 @@ reconstructed on Sunday from memory.
   directly on #102's "the count is the referee". Not reproducible on our own
   Mac (no identifier there currently has more than one row); his tests carry it.
 
-### Fri 19 Sep: one merge
+### Fri 19 Sep: two merges
 
 - **#110 the security code fills in Zen and Firefox.** joshhattan (github, no
   handle published; asked on the PR how he wants to be credited). Clicking
@@ -162,6 +162,32 @@ reconstructed on Sunday from memory.
   page in Zen 1.22.2b plus a test page counting `input` events. One thing left
   open for him: Gecko's write is synchronous, so a late-landing write plus the
   typed keys would double the code, and nothing re-checks between the two.
+
+- **#109 a window you move stays put, and the popout follows the icon you
+  clicked.** joshhattan (github, no handle published; asked on the PR, still
+  open). Three fixes in one PR. The first is the good one: `sameAddress()`
+  compared the window's own address, `0x5b1604b31bf0`, against the address
+  Hyprland puts on the event socket, `5b1604b31bf0`, as plain strings. They
+  never matched, so the `reason: "move"` path added by #87 was dead code from
+  the day it shipped and `strayReturn` undid every deliberate move about 400 ms
+  later. Nothing covered it: the #87 devlog proved a stray move is returned but
+  never that a real move is saved, and `ui.test.ts` only asserted the string
+  `sameAddress` existed. Both address formats confirmed here on gus against
+  socket2 and `hyprctl clients`. The other two are the multi-monitor bar: only
+  the first screen's widget owns a panel, so a click on any other bar, and
+  `SUPER+CTRL+<n>` on any other screen, went to the leader's copy or nowhere at
+  all, silently, with the shell counting it as success. Followers now forward
+  their screen name, and the leader re-anchors the panel to that bar. He chose
+  a separate open-only verb (`openon`, not `toggleon`) so a hotkey meaning
+  "open" cannot close a panel that is already up, which is the right call and
+  meshes with Omarchy's own routing: `BarModel.pickPanelSlot` prefers an open
+  copy, so the next press still reaches the leader and closes it. Verified here
+  by deploying onto the live shell and driving every verb, plus a screenshot.
+  NOT verified here: gus has one monitor attached, so the follower path was
+  only exercised through IPC, not across two physical bars. His DP-1/DP-2
+  testing carries that half. His base was three commits old, so it was
+  cherry-picked onto current main first; only CHANGELOG conflicted. 622 tests
+  green.
 
 ### Waiting on people, Fri 18 Sep
 - **#103** Damon Janis, https://x.com/damonjanis: CI failed on a GitHub 504
