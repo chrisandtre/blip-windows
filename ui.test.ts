@@ -400,6 +400,21 @@ describe("QML safety invariants", () => {
     expect(widget).toContain("function close() {");
   });
 
+  test("a follower forwards to the shell that is actually running", () => {
+    // `qs -p` matches a running instance by its CONFIG PATH, so the literal
+    // /usr/share/omarchy/shell is right only on a stock install. Under
+    // `omarchy dev link` the shell runs from a checkout and every forward exits
+    // 255 with "No running instances" — silently, because the shell's own
+    // summon still reports ok. Quickshell.shellDir is the running shell's own
+    // directory, and equals the stock path on a stock box.
+    expect(widget).toContain("readonly property string shellRoot: String(Quickshell.shellDir)");
+    expect(widget).not.toContain('"-p", "/usr/share/omarchy/shell"');
+    // Every forward uses it, none re-hardcodes the path.
+    const forwards = widget.match(/"qs", "-p", [^,]+,/g) ?? [];
+    expect(forwards.length).toBeGreaterThan(0);
+    for (const f of forwards) expect(f).toContain("root.shellRoot");
+  });
+
   test("a panel hotkey on a follower screen reaches the leader's panel", () => {
     // The shell hands the hotkey to the widget on the FOCUSED screen; only the
     // leader owns a panel. A no-op open() on a follower is silent (the shell

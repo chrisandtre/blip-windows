@@ -23,6 +23,14 @@ BarWidget {
   moduleName: "nixfred.blip"
 
   readonly property string home: Quickshell.env("HOME")
+  // Every follower->leader forward runs `qs -p <shell> ipc call`, and `-p` has
+  // to name the shell that is ACTUALLY running: `qs` matches instances by their
+  // config path. The literal /usr/share/omarchy/shell is right only on a stock
+  // install; with `omarchy dev link` the shell runs out of a checkout and every
+  // forward exits 255 with "No running instances" while the shell's own summon
+  // still reports ok, so a follower bar silently does nothing. Quickshell.shellDir
+  // is that path on both, and is /usr/share/omarchy/shell on a stock box.
+  readonly property string shellRoot: String(Quickshell.shellDir)
   readonly property string collectorPath:
     decodeURIComponent(Qt.resolvedUrl("collector.ts").toString().replace(/^file:\/\//, ""))
 
@@ -108,7 +116,7 @@ BarWidget {
   function open() { root.openOn(root.ownScreen ? String(root.ownScreen.name) : "") }
   function close() {
     if (panelLoader.item) panelLoader.item.close()
-    else if (!root.leader) Quickshell.execDetached(["qs", "-p", "/usr/share/omarchy/shell", "ipc", "call", root.moduleName, "close"])
+    else if (!root.leader) Quickshell.execDetached(["qs", "-p", root.shellRoot, "ipc", "call", root.moduleName, "close"])
   }
   function toggle() { root.toggleOn("") }
   property alias anchorButton: button
@@ -139,7 +147,7 @@ BarWidget {
   // a panel that is already up. An open panel stays where it is.
   function openOn(screenName) {
     if (!root.leader) {
-      Quickshell.execDetached(["qs", "-p", "/usr/share/omarchy/shell", "ipc", "call", root.moduleName, "openon", screenName])
+      Quickshell.execDetached(["qs", "-p", root.shellRoot, "ipc", "call", root.moduleName, "openon", screenName])
       return
     }
     var p = panelLoader.item
@@ -278,9 +286,9 @@ BarWidget {
   function leftClick() {
     if (!root.leader) {
       // a follower bar: ask the leader (only it answers IPC)
-      if (dblClick.running) { dblClick.stop(); Quickshell.execDetached(["qs", "-p", "/usr/share/omarchy/shell", "ipc", "call", root.moduleName, "app"]); return }
+      if (dblClick.running) { dblClick.stop(); Quickshell.execDetached(["qs", "-p", root.shellRoot, "ipc", "call", root.moduleName, "app"]); return }
       dblClick.restart()
-      Quickshell.execDetached(["qs", "-p", "/usr/share/omarchy/shell", "ipc", "call", root.moduleName, "toggleon", root.ownScreen ? String(root.ownScreen.name) : ""])
+      Quickshell.execDetached(["qs", "-p", root.shellRoot, "ipc", "call", root.moduleName, "toggleon", root.ownScreen ? String(root.ownScreen.name) : ""])
       return
     }
     if (dblClick.running) {
@@ -712,7 +720,7 @@ BarWidget {
       reopen = ["--hint=boolean:transient:true"]
     else if (chatArg !== "" && /^[A-Za-z0-9._@:;$-]{1,256}$/.test(chatArg))
       reopen = ["--hint=string:omarchy-exec-argv:" + JSON.stringify(
-        ["qs", "-p", "/usr/share/omarchy/shell", "ipc", "call",
+        ["qs", "-p", root.shellRoot, "ipc", "call",
          root.moduleName, "goto", chatArg])]
 
     notifyProc.command = [
@@ -990,7 +998,7 @@ BarWidget {
         // A refresh or mark-all started HERE was a second collector racing the
         // leader's over state.json (Astra #10). Ask the leader, like leftClick.
         // `read` is automation-gated, so with automation=off this is a no-op.
-        Quickshell.execDetached(["qs", "-p", "/usr/share/omarchy/shell", "ipc", "call",
+        Quickshell.execDetached(["qs", "-p", root.shellRoot, "ipc", "call",
                                  root.moduleName, code === Qt.RightButton ? "read" : "refresh"])
         return
       }

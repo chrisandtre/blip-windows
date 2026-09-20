@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.6.1 — 2026-09-20
+
+- **A second monitor's bar icon works on a development shell too.** Blip's bar
+  has one copy per screen, only the first owns the panel, and the others hand
+  their clicks and hotkeys to it by running `qs -p <shell> ipc call`. That path
+  was written with the shell's stock location baked in, which is correct on a
+  normal install and wrong the moment the shell runs from a checkout (`omarchy
+  dev link`): the forward found no matching instance, exited, and the shell
+  still reported the summon as a success, so clicking the icon or pressing the
+  hotkey on any screen but the first did nothing at all and said nothing. It now
+  asks Quickshell where the running shell actually lives, which is the stock
+  path on a stock box. Affects every forward, including the double-click app
+  window, `goto`, refresh and mark-all-read, not only the popout.
+
 ## 2.6.0 — 2026-09-19 — codes that fill themselves, senders you can save
 
 - **A window you move stays where you put it.** Sending the Blip window to

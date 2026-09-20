@@ -39,6 +39,10 @@ LAST X POST: CONTRIBUTORS-X-POST.md (2026-09-11). Everything below the
 marker for Post 2 is in the Post 2 draft in X-POSTS.md.
 ------------------------------------------------------------------------
 
+2026-09-20  (direct)  Follower bars forward to the shell that is ACTUALLY running (Quickshell.shellDir), not the hardcoded
+                 /usr/share/omarchy/shell. Under `omarchy dev link` every forward exited 255 "No running instances" while the
+                 shell's summon still reported ok, so a second monitor's icon and hotkey did nothing, silently. Found verifying #109.
+                 Fred Nix / Larry, X https://x.com/nixfred
 2026-09-19  #109 Manual window moves stick, and the popout opens on the screen whose icon you clicked: the window's 0x-prefixed
                  address never matched Hyprland's bare-hex event, so every deliberate move was undone as a stray remap; and a
                  follower bar's click now carries its screen (toggleon/openon) so the panel re-anchors there, including SUPER+CTRL+<n>.

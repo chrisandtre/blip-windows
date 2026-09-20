@@ -146,6 +146,24 @@ reconstructed on Sunday from memory.
   directly on #102's "the count is the referee". Not reproducible on our own
   Mac (no identifier there currently has more than one row); his tests carry it.
 
+### Sat 20 Sep: 2.6.0 and 2.6.1
+
+- **2.6.0 cut**, 27 PRs this week from 8 people. Headline: security codes fill
+  themselves, an unknown sender can be saved as a contact, right-click quotes a
+  reply, a group read in Blip clears the phone, Send Later shows as Scheduled,
+  GIFs arrive as GIFs, stamps cross the bridge as UTC.
+- **2.6.1, our own fix, found while verifying #109.** Every follower-to-leader
+  forward ran `qs -p /usr/share/omarchy/shell`, and `qs` matches instances by
+  config path, so on any machine running the shell from a checkout
+  (`omarchy dev link`, which is this one) all six forwards exited 255 with
+  "No running instances". The shell's own summon still returned ok, so a second
+  monitor's bar icon and its hotkey did nothing and said nothing. Four of the
+  six calls predate #109; joshhattan's two matched the house style and were
+  right to. Now `Quickshell.shellDir`, which IS the stock path on a stock box.
+  Worth saying plainly: #109 was correct and its own test passed, and the
+  feature was still inert here. A guard test now fails on any re-hardcoded path,
+  and it was checked against the old file to prove it can fail.
+
 ### Fri 19 Sep: two merges
 
 - **#110 the security code fills in Zen and Firefox.** joshhattan (github, no
