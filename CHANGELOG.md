@@ -1,7 +1,19 @@
 # Changelog
 
-## Unreleased
+## 2.6.0 — 2026-09-19 — codes that fill themselves, senders you can save
 
+- **A window you move stays where you put it.** Sending the Blip window to
+  another workspace worked for about 400 ms and then it flew back. Blip watches
+  Hyprland for a deliberate move so it can save that workspace as the window's
+  home, but it compared the window's own address (`0x5b1604b31bf0`) against the
+  address in the event (`5b1604b31bf0`, no prefix) as plain text, so the two
+  never matched. Every move you made was therefore filed as a stray remap and
+  undone, and the window could never leave the workspace it first opened on.
+- **Clicking the Blip icon on a second monitor opens the popout there.** The
+  panel is owned by the bar on the first screen, and a click anywhere else was
+  forwarded to it without saying where it came from, so the popout appeared on
+  monitor one no matter which icon you clicked. The click now carries its
+  screen and the panel is re-anchored to the bar you actually used.
 - **`SUPER+CTRL+<n>` opens the Blip popout on a multi-monitor bar.** Omarchy
   sends a panel hotkey to the widget on the focused screen, but only the
   leader (first screen) owns a panel, so on any other screen `open()` did
