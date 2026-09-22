@@ -9,10 +9,10 @@ treating a Mac as the gateway. Read this before touching anything.
 (Mac side)    bridge/mac/           VENDORED from claude-on-mac (pin in bridge/BRIDGE-VERSION; refresh with
               imsg imsg-send        scripts/sync-bridge.sh <rev>). Installed to ~/.blip/bin on the Mac by
               contacts tcc-check    bridge/mac/install.sh. Blip is ONE source for release (Fred's rule).
-              blip-dispatch         forced-command gate for ~/.ssh/blip_ed25519: only the five tools run.
+              blip-dispatch         forced-command gate for ~/.ssh/blip_ed25519: only the six tools run.
                                     imsg: sqlite read of chat.db, `--rich` (tapbacks/read_at/reply_to/
                                     attachments/error), `watch`, `attachment`, `chats`; Recently Deleted hidden.
-(Linux side)  bridge/linux/blip-shim installed as ~/bin/{imsg,imsg-send,imsg-read,contacts} by scripts/blip-setup
+(Linux side)  bridge/linux/blip-shim installed as ~/bin/{imsg,imsg-send,imsg-read,contacts,contact-save} by scripts/blip-setup
                                     (bin_dir= in bridge.conf moves them; bin-dir.ts parses it);
                                     reads ~/.config/blip/bridge.conf (host=, remote_bin='$HOME/.blip/bin'
                                     — single-quoted, expands on the MAC). `ssh -n` preflight; exit 69 offline.
@@ -406,10 +406,10 @@ what it is handed. Keep it that way.
 ## Working on it
 
 ```
-bun test                                   # 90+ tests, ~40 ms
+bun test                                   # 620+ tests, ~1.5 s
 bun collector.ts --deep | jq .unread       # live against the Mac
 bun thread.ts <chat-id> 40 | jq .bubbles   # one conversation
-cp *.qml *.ts *.mjs manifest.json ~/.config/omarchy/plugins/nixfred.blip/
+cp *.qml *.ts *.mjs otp-desktop.py manifest.json ~/.config/omarchy/plugins/nixfred.blip/
 omarchy-restart-shell                      # ALWAYS restart (hot-reload leaves IPC on a zombie)
 # MANDATORY after every deploy — a QML syntax error kills BOTH surfaces silently (2.1.4 shipped one):
 qs log /run/user/1000/quickshell/by-id/$(basename $(readlink /run/user/1000/quickshell/by-pid/$(pgrep -x quickshell)))/log.qslog -t 400 | grep -iE 'nixfred.blip.*(error|warn|unavailable|token)'
