@@ -39,6 +39,9 @@ LAST X POST: CONTRIBUTORS-X-POST.md (2026-09-11). Everything below the
 marker for Post 2 is in the Post 2 draft in X-POSTS.md.
 ------------------------------------------------------------------------
 
+2026-09-22  #111 CLAUDE.md's deploy recipe copies otp-desktop.py and names all five shims, including contact-save. Following the old one
+                 had left vic's autofill helper at 2.5.0 and contact-save missing on gus and vic; both fixed with the merge.
+                 Ian Swope, github.com/ianswope, X: none verified
 2026-09-20  (direct)  Follower bars forward to the shell that is ACTUALLY running (Quickshell.shellDir), not the hardcoded
                  /usr/share/omarchy/shell. Under `omarchy dev link` every forward exited 255 "No running instances" while the
                  shell's summon still reported ok, so a second monitor's icon and hotkey did nothing, silently. Found verifying #109.

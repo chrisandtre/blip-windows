@@ -25,6 +25,31 @@ reconstructed on Sunday from memory.
 
 ---
 
+## 2026-W39 (Mon 21 Sep to Sun 27 Sep): OPEN, post due Sun 27 Sep
+
+1 PR merged so far, from 1 person.
+
+### Tue 22 Sep: one merge
+
+- **#111 the deploy recipe in CLAUDE.md stops dropping files.** Ian Swope (no
+  verified X handle). Four stale facts, two of which silently cost working
+  features on any machine deployed by following it: the `cp` line left out
+  `otp-desktop.py`, which the autofill helper spawns from the installed plugin
+  directory, and the shim list stopped at four names when `blip-setup` has
+  installed a fifth, `contact-save`, since #91. It was not hypothetical here.
+  vic had been taken from 2.5.0 to 2.6.1 with that exact recipe on 20 Sep, so
+  its helper was still the 2.5.0 copy and #110's Zen/Firefox fix never reached
+  it. Neither gus nor vic had `contact-save`, so Save-as-contact failed on both,
+  and all five shims on both machines dated from 1 Sep. Fixed on both machines
+  with the merge. Verified: `contact-save` now reaches the Mac and gets the
+  tool's own refusal for empty input, where it used to be refused locally with
+  exit 64, and `imsg` still exits 0 through the refreshed shim.
+- Not merged, for the record: Ian also filed #112. Chrome, and Blink generally,
+  never exposes HTML `autocomplete` over AT-SPI, so security-code detection on
+  Chromium-family browsers is label-only. Left open on purpose (Fred,
+  2026-09-22). A missed label still gets the weaker "Select a field, then fill"
+  prompt; it is not silent.
+
 ## 2026-W38 (Mon 14 Sep to Sun 20 Sep): OPEN, post due Sun 20 Sep
 
 27 PRs merged so far, from 8 people.
