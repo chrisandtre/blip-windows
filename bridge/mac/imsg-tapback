@@ -279,45 +279,63 @@ function run(argv) {
     }
     return JSON.stringify({ ok: true, diag: out });
   }
-  var transcript = null;
-  for (var w = 0; w < wins.length && !transcript; w++) {
-    var t = find(wins[w], "TranscriptCollectionView", 600);
-    if (t && attr(t, "AXDescription") !== "Reply transcript") transcript = t;
-    else if (t && !transcript) transcript = t;
+  // Measured on macOS 26 (--probe, 2026-09-23): no cell ever reads
+  // AXSelected; the deep link with overlay=1 opens a "Reply transcript"
+  // pop-over holding just that message, and each message's first child
+  // carries the tapback actions ("Name:Heart", ...).
+  function findAll(root, id, budget) {
+    var queue = [root], seen = 0, out = [];
+    while (queue.length && seen < budget) {
+      var el = queue.shift(); seen++;
+      if (attr(el, "AXIdentifier") === id) { out.push(el); continue; }
+      if (PRUNE[attr(el, "AXRole")]) continue;
+      var k = kids(el); for (var i = 0; i < k.length; i++) queue.push(k[i]);
+    }
+    return out;
   }
-  if (!transcript) return JSON.stringify({ ok: false, why: "the conversation transcript was not found" });
-  // The deep link selects the message: the container whose first child is AXSelected.
-  var cells = kids(transcript), cell = null;
-  for (var c = cells.length - 1; c >= 0 && !cell; c--) {
-    var first = kids(cells[c])[0];
-    if (first && attr(first, "AXSelected") === true) cell = first;
+  function act(el, title) {   // one Apple Event to find, one to perform
+    try {
+      var a = el.actions.whose({ name: { _beginsWith: "Name:" + title } })();
+      if (a.length) { a[0].perform(); return true; }
+    } catch (e) {}
+    return false;
   }
-  var via = "selected";
-  if (!cell) {
-    // Fallback (#69's approach): the one on-screen cell whose accessibility
-    // description contains the message's text. Exactly one, or nothing.
+  function hasAct(el, title) {
+    try { return el.actions.whose({ name: { _beginsWith: "Name:" + title } })().length > 0; } catch (e) { return false; }
+  }
+  var ts = [];
+  for (var w = 0; w < wins.length; w++) ts = ts.concat(findAll(wins[w], "TranscriptCollectionView", 300));
+  if (!ts.length) return JSON.stringify({ ok: false, why: "the conversation transcript was not found" });
+  if (mode === "close") {
+    // The pop-over is the smaller transcript when two are open; AXCancel closes it.
+    if (ts.length < 2) return JSON.stringify({ ok: true, closed: false });
+    ts.sort(function (a, b) { return kids(a).length - kids(b).length; });
+    try { ts[0].actions.byName("AXCancel").perform(); } catch (e) {
+      var c0 = kids(ts[0]); try { c0[c0.length - 1].actions.byName("AXCancel").perform(); } catch (e2) {}
+    }
+    return JSON.stringify({ ok: true, closed: true });
+  }
+  ts.sort(function (a, b) { return kids(a).length - kids(b).length; });   // pop-over first
+  var cell = null, via = "";
+  for (var t = 0; t < ts.length && !cell; t++) {
+    var cells = kids(ts[t]), msgs = [];
+    for (var c = 0; c < cells.length; c++) {
+      var f0 = kids(cells[c])[0];
+      if (f0 && (hasAct(f0, titles.direct) || hasAct(f0, titles.picker[0]))) msgs.push(f0);
+    }
+    // The pop-over: exactly one message, and (when it has text) the text agrees.
+    if (msgs.length === 1 && (snippet.length < 4 || textMatches(cells).length === 1)) { cell = msgs[0]; via = "popover"; break; }
+    // Otherwise the one message on screen whose description holds its text (#69).
     var hits = textMatches(cells);
     if (hits.length === 1) { cell = hits[0]; via = "text"; }
     else if (hits.length > 1) return JSON.stringify({ ok: false, why: "more than one message on screen matches; not guessing" });
   }
-  if (!cell) return JSON.stringify({ ok: false, why: "the message is not selected on screen and no on-screen message matches its text" });
-  // Actions sit on the cell or on its first child, depending on the build.
-  var targets = [cell].concat(kids(cell).slice(0, 1));
-  if (mode === "probe") {
-    return JSON.stringify({ ok: true, probe: targets.map(function (e) {
-      return names(e).map(function (n) { return n.split("\n")[0]; });
-    }) });
-  }
-  for (var i = 0; i < targets.length; i++) {
-    var a = actionOn(targets[i], titles.direct);
-    if (a) { a.perform(); return JSON.stringify({ ok: true, via: "action/" + via }); }
-  }
+  if (!cell) return JSON.stringify({ ok: false, why: "could not single out the message on screen" });
+  if (act(cell, titles.direct)) return JSON.stringify({ ok: true, via: "action/" + via });
   // No direct action on this build: open the picker and press its button.
-  var opener = null;
-  for (var i = 0; i < targets.length && !opener; i++)
-    for (var j = 0; j < titles.picker.length && !opener; j++) opener = actionOn(targets[i], titles.picker[j]);
-  if (!opener) return JSON.stringify({ ok: false, why: "no \"" + titles.direct + "\" or Tapback action on the balloon (macOS may have renamed it; run --probe)" });
-  opener.perform();
+  var opened = false;
+  for (var j = 0; j < titles.picker.length && !opened; j++) opened = act(cell, titles.picker[j]);
+  if (!opened) return JSON.stringify({ ok: false, why: "no \"" + titles.direct + "\" or Tapback action on the message (macOS may have renamed it; run --probe)" });
   delay(0.75);
   var picker = null;
   for (var w = 0; w < wins.length && !picker; w++) picker = find(wins[w], "TapbackPickerCollectionView", 800);
@@ -443,30 +461,24 @@ def main():
             READ.restore_front(prev)
         print(json.dumps(report, ensure_ascii=False))
         return
+    ok = False
     try:
-        why = select_message(guid)
+        why = select_message(guid, overlay=True)
         if why:
             die(75, why)
-        res = jxa("probe" if opts["probe"] else "act", titles, picker_id, not opts["remove"])
-        if res.get("ok") is False and "not selected" in res.get("why", ""):
-            # Messages may need to be the active app to select from a link;
-            # one activation, the way imsg-read wakes a dormant menu.
-            READ.osa('tell application "Messages" to activate')
-            time.sleep(0.8)
-            select_message(guid)
-            res = jxa("probe" if opts["probe"] else "act", titles, picker_id, not opts["remove"])
+        res = jxa("act", titles, picker_id, not opts["remove"])
+        if not res.get("ok"):
+            die(75, res.get("why", "the tapback could not be performed"))
+        if res.get("via") == "already":
+            print("already in that state")
+            ok = True
+            return
+        # Verdict before closing: closing the pop-over at once can undo it (Beeper).
+        ok = confirmed(guid, remove_type if opts["remove"] else add_type, top)
     finally:
+        jxa("close", titles, picker_id, True)
         READ.restore_front(prev)
-
-    if opts["probe"]:
-        print(json.dumps({"titles": titles, **res}, ensure_ascii=False))
-        return
-    if not res.get("ok"):
-        die(75, res.get("why", "the tapback could not be performed"))
-    if res.get("via") == "already":
-        print("already in that state")
-        return
-    if confirmed(guid, remove_type if opts["remove"] else add_type, top):
+    if ok:
         print("removed" if opts["remove"] else "reacted")
         return
     die(75, "Messages did not record the tapback (nothing new in chat.db); not retrying")
