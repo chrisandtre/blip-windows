@@ -731,3 +731,15 @@ describe("Send Later bubbles", () => {
     expect(b!.scheduled).toBeUndefined();
   });
 });
+
+describe("the message guid rides onto the bubble (tapback target)", () => {
+  const today = "2026-08-30";
+  test("a rich row's guid is carried; a row without one gets none", () => {
+    const b = decorate([
+      msg({ ts: "2026-08-30T12:00:00Z", guid: "5A1B2C3D-0000-4000-8000-000000000001" }),
+      msg({ ts: "2026-08-30T12:01:00Z" }),
+    ], today);
+    expect(b[0]!.guid).toBe("5A1B2C3D-0000-4000-8000-000000000001");
+    expect("guid" in b[1]!).toBe(false);
+  });
+});

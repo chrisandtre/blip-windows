@@ -99,6 +99,9 @@ export interface Bubble {
   scheduledFor?: string;
   localId?: string;
   failureReason?: string;
+  /** The Mac's guid for this message, when the bridge sends one: the exact
+   *  handle a reaction (tapback) is aimed at. Absent on pending bubbles. */
+  guid?: string;
 }
 
 /** A send in flight: what was typed, where, and when Enter was pressed
@@ -327,6 +330,7 @@ export function decorate(msgs: ImsgMessage[], today: string, formats = DEFAULT_F
       audio: m.audio === true,
       html: linkify((m.text ?? "").replace(/￼/g, "").trim()),
       failed: m.from_me && typeof m.error === "number" && m.error !== 0,
+      ...(typeof m.guid === "string" && m.guid ? { guid: m.guid } : {}),
       ...(m.scheduled === true
         ? { scheduled: true, scheduledFor: `${dayLabel(m.ts, today, formats)} ${clockLabel(m.ts, formats.time)}` }
         : {}),
