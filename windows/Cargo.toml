@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/blip-wire", "crates/blip-mux", "crates/blip-shim"]
+members = ["crates/blip-wire", "crates/blip-mux", "crates/blip-shim", "app/src-tauri"]
 
 [workspace.package]
 edition = "2021"
