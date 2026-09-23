@@ -25,9 +25,29 @@ async function run(cmd: string[], stdin: string | null) {
   return { code, stdout, stderr };
 }
 
+// Fake sends "land" like real ones: ~2 s after the send, thread loads that
+// carry the pending send see a real row for it (the Mac writing chat.db).
+const landed: { text: string; at: number }[] = [];
+
+/** What thread.ts would have returned had the row existed: the pending
+ *  bubble for a landed send becomes a real one and leaves `pending`. */
+function landFakeSends(out: { code: number; stdout: string; stderr: string }) {
+  let d: any;
+  try { d = JSON.parse(out.stdout); } catch { return out; }
+  if (!d?.ok || !Array.isArray(d.pending)) return out;
+  const due = (t: string) => landed.some((l) => l.text === t.trim() && Date.now() - l.at > 2000);
+  const settle = d.pending.filter((p: any) => !p.failed && due(p.text));
+  if (!settle.length) return out;
+  const ids = new Set(settle.map((p: any) => p.localId));
+  d.bubbles = d.bubbles.map((b: any) => (b.pending && ids.has(b.localId) ? { ...b, pending: false, localId: undefined } : b));
+  d.pending = d.pending.filter((p: any) => !ids.has(p.localId));
+  return { ...out, stdout: JSON.stringify(d) };
+}
+
 async function fakeSend(what: string, stdin: string | null) {
   await Bun.sleep(1000);
   const fail = (stdin || "").trimStart().startsWith("FAIL");
+  if (!fail && what === "imsg-send") landed.push({ text: (stdin || "").trim(), at: Date.now() });
   console.log(`[mock] FAKE ${what}: ${fail ? "failed" : "ok"} (${(stdin || "").length} chars on stdin, nothing sent)`);
   return fail ? { code: 1, stdout: "", stderr: "simulated failure" } : { code: 0, stdout: what === "send-file" ? JSON.stringify({ ok: true, online: true, error: "" }) : "", stderr: "" };
 }
@@ -67,7 +87,10 @@ Bun.serve({
         body = { code: 0, stdout: JSON.stringify({ ok: true, name: [d.firstName, d.lastName].filter(Boolean).join(" ") }), stderr: "" };
       } else if (script === "contact-save") body = await run(["bun", "contact-save.ts", ...(args.args as string[])], (args.stdin as string) ?? null);
       else if (!SCRIPTS.has(script)) body = { code: 64, stdout: "", stderr: `mock: '${script}' not allowed` };
-      else body = await run(["bun", `${script}.ts`, ...(args.args as string[])], (args.stdin as string) ?? null);
+      else {
+        body = await run(["bun", `${script}.ts`, ...(args.args as string[])], (args.stdin as string) ?? null);
+        if (script === "thread") body = landFakeSends(body as { code: number; stdout: string; stderr: string });
+      }
     } else if (cmd === "shim") {
       const tool = String(args.tool);
       if (tool === "imsg-send") body = await fakeSend("imsg-send", (args.stdin as string) ?? null);

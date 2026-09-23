@@ -295,7 +295,7 @@ static PANEL_BLURRED: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 /// The tray popout (Panel.qml's equivalent): toggled by a left click, placed
 /// against the tray icon inside the work area, above a bottom taskbar and
 /// below a top one.
-fn toggle_panel(app: &AppHandle, rect: tauri::Rect) {
+fn toggle_panel(app: &AppHandle, rect: tauri::Rect, cursor: tauri::PhysicalPosition<f64>) {
     let Some(panel) = app.get_webview_window("panel") else { return };
     if panel.is_visible().unwrap_or(false) {
         let _ = panel.hide();
@@ -304,27 +304,84 @@ fn toggle_panel(app: &AppHandle, rect: tauri::Rect) {
     if PANEL_BLURRED.lock().unwrap().is_some_and(|t| t.elapsed() < Duration::from_millis(300)) {
         return;
     }
-    let icon = rect.position.to_physical::<f64>(1.0);
-    let icon_size = rect.size.to_physical::<f64>(1.0);
-    if let Ok(size) = panel.outer_size() {
-        let (w, h) = (size.width as f64, size.height as f64);
-        let mut x = icon.x + icon_size.width / 2.0 - w / 2.0;
-        let mut y = icon.y - h - 8.0;
-        if let Ok(Some(m)) = app.monitor_from_point(icon.x, icon.y) {
-            let wa = m.work_area();
-            let (left, top) = (wa.position.x as f64, wa.position.y as f64);
-            let (right, bottom) = (left + wa.size.width as f64, top + wa.size.height as f64);
-            if icon.y < top + (bottom - top) / 2.0 {
-                y = icon.y + icon_size.height + 8.0; // taskbar on top
-            }
-            x = x.clamp(left + 8.0, right - w - 8.0);
-            y = y.clamp(top + 8.0, bottom - h - 8.0);
-        }
-        let _ = panel.set_position(tauri::PhysicalPosition::new(x, y));
+    let spot = place_panel(app, &panel, rect, cursor);
+    if let Some(p) = spot {
+        let _ = panel.set_position(p);
     }
     let _ = panel.show();
+    // Windows may still center a window on its first show; place it again.
+    if let Some(p) = spot {
+        let _ = panel.set_position(p);
+    }
     let _ = panel.set_focus();
     let _ = app.emit_to("panel", "blip://panel-shown", ());
+}
+
+/// Where the popout goes: centred over the tray icon (or the click, if the
+/// icon's bounds come back empty), above a bottom taskbar or below a top
+/// one, inside the monitor's work area.
+fn place_panel(app: &AppHandle, panel: &tauri::WebviewWindow, rect: tauri::Rect, cursor: tauri::PhysicalPosition<f64>) -> Option<tauri::PhysicalPosition<f64>> {
+    let mut icon = rect.position.to_physical::<f64>(1.0);
+    let mut icon_size = rect.size.to_physical::<f64>(1.0);
+    if icon_size.width < 1.0 || icon_size.height < 1.0 {
+        icon = cursor;
+        icon_size = tauri::PhysicalSize::new(1.0, 1.0);
+    }
+    let m = app.monitor_from_point(icon.x, icon.y).ok().flatten()?;
+    // A never-shown window may not know its size yet: fall back to the
+    // configured 380x600 at this monitor's scale.
+    let (w, h) = match panel.outer_size() {
+        Ok(s) if s.width > 0 && s.height > 0 => (s.width as f64, s.height as f64),
+        _ => (380.0 * m.scale_factor(), 600.0 * m.scale_factor()),
+    };
+    let wa = m.work_area();
+    let (left, top) = (wa.position.x as f64, wa.position.y as f64);
+    let (right, bottom) = (left + wa.size.width as f64, top + wa.size.height as f64);
+    let x = (icon.x + icon_size.width / 2.0 - w / 2.0).clamp(left + 8.0, (right - w - 8.0).max(left + 8.0));
+    let y = if icon.y < top + (bottom - top) / 2.0 {
+        icon.y + icon_size.height + 8.0 // taskbar on top
+    } else {
+        icon.y - h - 8.0
+    };
+    let y = y.clamp(top + 8.0, (bottom - h - 8.0).max(top + 8.0));
+    Some(tauri::PhysicalPosition::new(x, y))
+}
+
+/// Open a fetched attachment in its default app. Only files inside Blip's
+/// attachment cache qualify. The Windows Media Player app cannot read files
+/// under %LOCALAPPDATA% (it reports 0x80070002, "can't get to your local
+/// storage") but can read %TEMP%, so the file is opened from a copy there,
+/// under its own name: %TEMP%\Blip\<id>\IMG_1163.mov. The copy keeps the Mark
+/// of the Web stream (CopyFileEx copies it). Copies older than a day go.
+#[tauri::command]
+fn open_attachment(app: AppHandle, path: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let cache = std::fs::canonicalize(blip_home().join(".cache").join("blip").join("att")).map_err(|e| e.to_string())?;
+    let file = std::fs::canonicalize(&path).map_err(|_| "attachment not found".to_string())?;
+    if !file.starts_with(&cache) || !file.is_file() {
+        return Err("not a Blip attachment".into());
+    }
+    // Cache names are <id>-<transform>-<name> (fetch.ts cacheFileName).
+    let cached = file.file_name().and_then(|n| n.to_str()).ok_or("bad name")?.to_string();
+    let mut parts = cached.splitn(3, '-');
+    let (id, name) = match (parts.next(), parts.next(), parts.next()) {
+        (Some(id), Some(_), Some(name)) if id.chars().all(|c| c.is_ascii_digit()) && !name.is_empty() => (id.to_string(), name.to_string()),
+        _ => ("x".to_string(), cached.clone()),
+    };
+    let temp = std::env::temp_dir().join("Blip");
+    if let Ok(rd) = std::fs::read_dir(&temp) {
+        for e in rd.flatten() {
+            let old = e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok());
+            if old.is_some_and(|age| age > Duration::from_secs(86_400)) {
+                let _ = std::fs::remove_dir_all(e.path());
+            }
+        }
+    }
+    let dir = temp.join(&id);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let copy = dir.join(&name);
+    std::fs::copy(&file, &copy).map_err(|e| e.to_string())?;
+    app.opener().open_path(copy.to_string_lossy(), None::<&str>).map_err(|e| e.to_string())
 }
 
 /// A Windows toast. Clicking it opens that conversation ("" just shows the
@@ -431,7 +488,7 @@ pub fn run_app() {
         .plugin(tauri_plugin_autostart::Builder::new().arg(HIDDEN_ARG).build())
         .manage(Tray(Mutex::new(None)))
         .manage(Watching(AtomicBool::new(false)))
-        .invoke_handler(tauri::generate_handler![core, shim, start_watch, set_status, show_main, write_draft, setup_state, run_setup, toast])
+        .invoke_handler(tauri::generate_handler![core, shim, start_watch, set_status, show_main, write_draft, setup_state, run_setup, toast, open_attachment])
         .setup(|app| {
             if let Ok(dir) = app.path().resource_dir() {
                 let _ = RESOURCES.set(dir);
@@ -470,8 +527,8 @@ pub fn run_app() {
                 })
                 // Left click: the popout. Double click: the full window (as on the Omarchy bar).
                 .on_tray_icon_event(|tray, e| match e {
-                    TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, rect, .. } => {
-                        toggle_panel(tray.app_handle(), rect);
+                    TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, rect, position, .. } => {
+                        toggle_panel(tray.app_handle(), rect, position);
                     }
                     TrayIconEvent::DoubleClick { button: MouseButton::Left, .. } => {
                         if let Some(p) = tray.app_handle().get_webview_window("panel") {

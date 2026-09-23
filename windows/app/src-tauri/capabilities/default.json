@@ -15,14 +15,6 @@
     "notification:default",
     "dialog:allow-open",
     "opener:allow-open-url",
-    "opener:allow-default-urls",
-    {
-      "identifier": "opener:allow-open-path",
-      "allow": [
-        {
-          "path": "$LOCALDATA/Blip/.cache/blip/att/**"
-        }
-      ]
-    }
+    "opener:allow-default-urls"
   ]
 }

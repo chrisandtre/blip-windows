@@ -11,6 +11,7 @@ import { emit, emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import type { Thread, Toast } from "./bridge";
+import { noteMacSeconds } from "./clock";
 import { Poller } from "./poller";
 import { setupScreen, setupState } from "./setup";
 import { View, type Control } from "./view";
@@ -110,6 +111,7 @@ function follower() {
   let ping: number | undefined;
   void listen<string>("blip://watch", (e) => {
     if (e.payload === "ready" || e.payload === "hb") return;
+    noteMacSeconds(e.payload);
     clearTimeout(ping);
     ping = window.setTimeout(() => view.pushReload(), 250);
   });

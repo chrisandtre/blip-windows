@@ -3,6 +3,7 @@
 // to BarWidget.qml.
 import { listen } from "@tauri-apps/api/event";
 import { core, json, type CollectorOut, type SecurityCode, type Thread, type Toast } from "./bridge";
+import { noteMacSeconds } from "./clock";
 
 interface Req { deep: boolean; markRead: boolean; readChat: string; seen: string }
 
@@ -92,6 +93,7 @@ export class Poller {
     this.liveness = window.setTimeout(() => this.setWatch(false), 90_000);
     if (line === "ready") return this.setWatch(true);
     if (line === "hb") return;
+    noteMacSeconds(line); // the Mac's clock (clock.ts)
     this.setWatch(true);
     clearTimeout(this.pingTimer);
     this.pingTimer = window.setTimeout(() => {

@@ -4,12 +4,14 @@
 // a text node, links included, because this webview can call the bridge.
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { openPath, openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { invoke } from "@tauri-apps/api/core";
 import { open as pickFiles } from "@tauri-apps/plugin-dialog";
 import {
   core, fileSrc, filePath, json, shim, writeDraft,
   type Attachment, type Bubble, type PendingSend, type SecurityCode, type Thread,
 } from "./bridge";
+import { clockIsOff, clockSkew, wireStamp } from "./clock";
 /** What a surface asks of the poller. The main window passes the Poller
  *  itself; the tray popout passes a follower that forwards to it (one
  *  poller, several surfaces, as in BarWidget.qml). */
@@ -78,8 +80,6 @@ function openLink(url: string) {
 
 const stampMs = (ts: string) => Date.parse(/^\d{4}-\d\d-\d\d \d/.test(ts) ? ts.replace(" ", "T") : ts);
 const localDay = (ms: number) => new Date(ms).toDateString();
-/** "2026-09-22T18:33:12Z", the wire format every mark compares against. */
-const wireStamp = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 
 /** Row and hit times, like BlipView.fmtTime (:1578-1596). */
 function fmtTime(ts: string): string {
@@ -147,6 +147,8 @@ export class View {
   private sendQueue: { chat: string; text: string; stamp: string; localId: number; target: string[] }[] = [];
   private sending = false;
   private nextSendId = 0;
+  /** PC time of each send, so its stamp can follow clock.ts's offset. */
+  private sentAt = new Map<number, number>();
   private attachDrafts: string[] = [];
   private drafts = new Map<string, string>();
 
@@ -252,6 +254,8 @@ export class View {
         this.requestThreadLoad(this.active.chat);
       }
     });
+    // The reader scrolling takes over from any pending anchor.
+    for (const ev of ["wheel", "pointerdown", "touchstart"]) this.scroller.addEventListener(ev, () => { this.anchor = null; }, { passive: true });
     this.scroller.addEventListener("click", (e) => {
       const a = (e.target as HTMLElement).closest("a") as HTMLAnchorElement | null;
       if (a?.dataset.href) {
@@ -283,6 +287,11 @@ export class View {
     this.online = s.online;
     this.unread = s.unread;
     this.statusEl.textContent = "";
+    if (clockIsOff()) {
+      const hours = Math.round(Math.abs(clockSkew()) / 360_000) / 10;
+      this.statusEl.append(h("div", "warn", `This PC's clock is ${hours} h ${clockSkew() > 0 ? "behind" : "ahead of"} your Mac. `
+        + "Sync it: Settings > Time & language > Date & time > Sync now."));
+    }
     if (!s.online) {
       this.statusEl.append(h("div", "offline", "Mac unreachable - bridge offline"),
         h("div", "offline-detail", "Blip keeps trying. Check that the Mac is awake and on the network."));
@@ -444,6 +453,8 @@ export class View {
     this.stick = true;
     this.pushPending = false;
     this.activeLastTs = t.last_ts;
+    this.limit = 80;
+    this.jump = null;
     this.attachDrafts = [];
     this.composer.value = this.drafts.get(t.chat) || "";
     this.composerInput();
@@ -506,8 +517,11 @@ export class View {
     this.threadQueued = "";
     this.threadRunning = chat;
     const revision = this.pendingRevision;
-    const pending = this.pendingSends.filter((p) => p.chat === chat);
-    const args = [chat, "80", "--time-format", TIME_FORMAT, "--date-format", "MMM d", "--date-format-with-year", "MMM d, yyyy"];
+    // Re-stamped in the Mac's time on every load: the offset may only have
+    // become known when this very send landed (clock.ts).
+    const pending = this.pendingSends.filter((p) => p.chat === chat)
+      .map((p) => (this.sentAt.has(p.localId) ? { ...p, ts: wireStamp(this.sentAt.get(p.localId)) } : p));
+    const args = [chat, String(this.limit), "--time-format", TIME_FORMAT, "--date-format", "MMM d", "--date-format-with-year", "MMM d, yyyy"];
     if (pending.length) args.push("--pending-stdin");
     const out = await core("thread", args, pending.length ? JSON.stringify(pending) : undefined).catch((e) => ({ code: -1, stdout: "", stderr: String(e) }));
     this.threadRunning = "";
@@ -564,12 +578,15 @@ export class View {
     if (j !== this.bubblesJson) {
       this.bubblesJson = j;
       this.bubbles = list;
-      const pin = this.firstLoad || this.stick;
+      const jumping = this.jump?.chat === chat;
+      const pin = !jumping && (this.firstLoad || this.stick);
       this.firstLoad = false;
       this.renderConv(pin);
       this.autoFetchImages();
+      if (jumping) this.landJump(chat);
     } else {
       this.renderHead();
+      if (this.jump?.chat === chat) this.landJump(chat);
     }
     this.markRead(chat, seen);
   }
@@ -662,10 +679,10 @@ export class View {
     this.renderHead();
     const t = this.active;
     this.main.classList.toggle("is-empty", !t);
-    // Emptying the scroller clamps it to the top; a reload while reading
-    // older messages must leave the reader where they were.
-    const keep = this.scroller.scrollTop;
-    if (!pinBottom) requestAnimationFrame(() => { this.scroller.scrollTop = keep; });
+    // A re-render while reading older messages must leave the reader where
+    // they were. A pixel offset is not enough: rebuilt images have no height
+    // until they load, so the message at the top is the anchor instead.
+    if (!pinBottom) this.captureAnchor();
     this.scroller.textContent = "";
     if (!t) {
       this.scroller.append(h("div", "empty", "Pick a conversation"));
@@ -675,11 +692,45 @@ export class View {
     const group = isGroupId(t.chat);
     for (const b of this.bubbles) this.scroller.append(this.bubble(b, group));
     this.renderDrafts();
-    if (pinBottom) requestAnimationFrame(() => { this.scroller.scrollTop = this.scroller.scrollHeight; this.stick = true; });
+    if (pinBottom) {
+      this.anchor = null;
+      requestAnimationFrame(() => { this.scroller.scrollTop = this.scroller.scrollHeight; this.stick = true; });
+    } else {
+      // Directly, not in a frame callback: frames pause while a window is
+      // hidden, and reading layout forces it anyway.
+      this.restoreAnchor();
+    }
+  }
+
+  /** The message at the top of the view and its offset, kept for a few
+   *  seconds so images that finish loading can put it back. */
+  private anchor: { ts: string; offset: number; until: number } | null = null;
+  private captureAnchor() {
+    if (this.anchor && Date.now() < this.anchor.until) return; // one already pending
+    const top = this.scroller.getBoundingClientRect().top;
+    const msgs = this.scroller.querySelectorAll<HTMLElement>(".msg");
+    for (const m of msgs) {
+      const r = m.getBoundingClientRect();
+      if (r.bottom > top) { this.anchor = { ts: m.dataset.ts || "", offset: r.top - top, until: Date.now() + 3000 }; return; }
+    }
+  }
+  private anchorTo(ts: string, offset: number) {
+    this.anchor = { ts, offset, until: Date.now() + 3000 };
+    this.restoreAnchor();
+  }
+  private restoreAnchor() {
+    const a = this.anchor;
+    if (!a || Date.now() > a.until || this.stick) return;
+    const el = this.scroller.querySelector<HTMLElement>(`.msg[data-ts="${CSS.escape(a.ts)}"]`);
+    if (!el) return;
+    const top = this.scroller.getBoundingClientRect().top;
+    this.scroller.scrollTop += el.getBoundingClientRect().top - top - a.offset;
   }
 
   private bubble(b: Bubble, group: boolean): HTMLElement {
     const wrap = h("div", "msg" + (b.from_me ? " mine" : " theirs") + (b.groupStart ? " start" : "") + (b.groupEnd ? " end" : ""));
+    wrap.dataset.ts = b.ts;
+    if (this.found && this.found.ts === b.ts && Date.now() < this.found.until) wrap.classList.add("flash");
     if (b.day) wrap.append(h("div", "day", b.day));
     if (b.retracted) {
       wrap.append(h("div", "tombstone", `${b.from_me ? "You" : b.name || "They"} unsent a message`));
@@ -731,7 +782,7 @@ export class View {
       img.src = fileSrc(url);
       img.alt = att.name;
       img.onclick = () => this.openAttachment(att);
-      img.onload = () => { if (this.stick) this.scroller.scrollTop = this.scroller.scrollHeight; };
+      img.onload = () => { if (this.stick) this.scroller.scrollTop = this.scroller.scrollHeight; else this.restoreAnchor(); };
       return img;
     }
     const chip = h("button", "chip" + (mine ? " mine" : ""));
@@ -791,7 +842,7 @@ export class View {
     if (d?.ok) {
       this.attFiles.set(att.id, d.url);
       if (action === "open") {
-        if (openableMime(att.mime)) void openPath(d.path);
+        if (openableMime(att.mime)) void invoke("open_attachment", { path: d.path }).catch((e) => { this.noteEl.textContent = `could not open: ${e}`; });
         else this.noteEl.textContent = `saved, not opened (${att.mime}): ${d.path}`;
       }
     } else {
@@ -861,8 +912,10 @@ export class View {
     if (!this.online) return;
     if (!isSendable(t)) { this.noteEl.textContent = "Read-only - group id unknown - send from your phone"; return; }
     if (this.attachDrafts.length) return void this.sendFiles(t, text);
-    const stamp = wireStamp();
+    const sentAt = Date.now();
+    const stamp = wireStamp(sentAt);
     const localId = ++this.nextSendId;
+    this.sentAt.set(localId, sentAt);
     this.pendingRevision++;
     this.pendingSends.push({ chat: t.chat, text, ts: stamp, localId });
     this.appendPendingBubble(text, stamp, localId);
@@ -1080,8 +1133,64 @@ export class View {
       last_ts: hit.ts || "", last_text: "", last_from_me: false, count: 0, unread: 0, pinned: false, pin_order: null,
     };
     this.startMode("list");
+    // A message hit lands on that message, not just the conversation.
+    const jump = hit.kind === "message" && hit.ts ? { chat: t.chat, ts: hit.ts } : null;
+    if (jump && this.active?.chat === t.chat) {
+      this.jump = jump;
+      this.requestThreadLoad(t.chat);
+      this.composer.focus();
+      return;
+    }
     this.openThread(t, true);
+    this.jump = jump;
   }
+
+  /** Scroll to the searched-for message once it is loaded; widen the window
+   *  (80 -> 320 -> 1280 -> 3200 rows) while it is older than what is loaded. */
+  private jump: { chat: string; ts: string } | null = null;
+  private limit = 80;
+  private landJump(chat: string): boolean {
+    const j = this.jump;
+    if (!j || j.chat !== chat) return false;
+    const want = stampMs(j.ts);
+    let best = -1, bestGap = Infinity;
+    this.bubbles.forEach((b, i) => {
+      const gap = Math.abs(stampMs(b.ts) - want);
+      if (!b.pending && gap < bestGap) { best = i; bestGap = gap; }
+    });
+    if (!this.bubbles.length) {
+      // Nothing loads for this id at all (some old short-code senders): no
+      // amount of widening will find the message.
+      this.jump = null;
+      this.noteEl.textContent = "This conversation could not be loaded.";
+      return false;
+    }
+    const oldest = stampMs(this.bubbles[0]!.ts);
+    if ((best < 0 || bestGap > 2000) && oldest > want && this.limit < 3200) {
+      this.limit = Math.min(this.limit * 4, 3200);
+      this.requestThreadLoad(chat);
+      return true;
+    }
+    this.jump = null;
+    if (best < 0 || bestGap > 2000) {
+      this.noteEl.textContent = "That message is too far back to show here.";
+      return false;
+    }
+    // The highlight belongs to the message, not the element: images loading
+    // right after the jump re-render the thread, and must keep it.
+    this.found = { ts: this.bubbles[best]!.ts, until: Date.now() + 2500 };
+    const el = this.scroller.querySelectorAll<HTMLElement>(".msg")[best];
+    if (el) {
+      el.classList.add("flash");
+      this.stick = false;
+      // Centre it, and keep it centred while images above it load.
+      const offset = Math.max(0, this.scroller.clientHeight / 2 - el.offsetHeight / 2);
+      this.anchorTo(this.bubbles[best]!.ts, offset);
+    }
+    window.setTimeout(() => this.scroller.querySelectorAll(".msg.flash").forEach((m) => m.classList.remove("flash")), 2600);
+    return true;
+  }
+  private found: { ts: string; until: number } | null = null;
 
   private searchKey(e: KeyboardEvent) {
     if (e.key === "Escape") { e.preventDefault(); this.startMode("list"); this.searchEl.blur(); this.focusList(); }

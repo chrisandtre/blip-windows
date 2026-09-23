@@ -181,3 +181,6 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .btn { padding: 7px 14px; border-radius: 8px; background: var(--side); border: 1px solid var(--line); }
 .btn.primary { background: var(--blue); color: #fff; border-color: transparent; font-weight: 600; }
 .btn:disabled { opacity: .5; }
+
+/* a message reached from search */
+.msg.flash .bubble, .msg.flash .att-img, .msg.flash .chip { box-shadow: 0 0 0 3px var(--blue); transition: box-shadow .6s; }
