@@ -15,7 +15,7 @@ Windows talks to the Mac directly, with its own key.
 | Mac side | Unchanged. New key goes through `blip-dispatch` like the Linux one | No second setup on the Mac |
 | Audience | Public | Installer, docs, and a setup wizard from the start |
 
-## Status (2026-09-22)
+## Status (2026-09-23)
 
 Working, verified against the real gateway Mac, installed from the built setup.exe:
 
@@ -23,26 +23,34 @@ Working, verified against the real gateway Mac, installed from the built setup.e
 - `blip-mux` + `blip-shim`: ping 95 ms, `imsg recent` 230 ms warm (Mac-side
   Python startup dominates, same as Linux), cold start 0.54 s, offline fails
   fast with exit 69.
-- Core on Windows: `bun test` 609 pass / 15 skip (Linux-only) / 0 fail.
+- Core: `bun test` 609 pass / 15 skip (Linux-only) / 0 fail on Windows; CI
+  runs it on ubuntu-latest too, and Linux passes.
 - App: conversation list, pinned tiles, contact photos, threads with every
-  bubble field, inline images, link cards, search, new chat, read marks,
-  tray with unread/offline icons, notifications (allowlist-gated by the
-  collector), security codes (5 min, memory only), keyboard navigation.
-- Installer: per-user NSIS; bundles blip-core/mux/shim and the Mac bridge.
+  bubble field, inline images, link cards, search, new chat, read marks, text
+  and file sends (a real send confirmed by Chris; failure and give-up paths
+  verified in mock mode), Add to Contacts, tray popout + full window, tray
+  unread/offline icons, notifications (allowlist-gated) that open their
+  conversation, security codes (5 min, memory only), keyboard navigation,
+  remembered window size, optional start at login.
+- Security: independent review, fixes applied (opener scope, fail-closed
+  paths, Mark of the Web on attachments, narrower page surface, CSP).
+- Installer: per-user NSIS; CI builds it; a `win-v*` tag drafts a release.
 
-Not yet verified, because it sends real messages and needs a person at the
-keyboard: text send, file send, pasted screenshot, group send, failed send.
+Needs a person to confirm on the installed build: the tray popout's
+placement, opening a link and an attachment, a group send.
 
-Next:
-1. Verify sends. Push `windows-client` so CI runs `bun test` on Linux too.
-2. Tray popout (the Omarchy panel equivalent). Today the tray toggles the window.
-3. Notification click opens the conversation; start at login; remember window size.
-4. Contact review / save and the share sheet (in the QML, not yet in the web UI).
-5. Code signing (Azure Trusted Signing) so SmartScreen does not warn.
-6. A long-running core process instead of one `blip-core.exe` per call:
-   lower per-poll cost, and a chance to shrink the bundle.
-7. Upstream PRs to nixfred/blip: `.gitattributes`; `platform.ts` + `bin-dir.ts`
-   (identical on Linux, enable Windows).
+Not done (and why):
+- Code signing: needs a certificate or Azure Trusted Signing account in the
+  publisher's name. Until then SmartScreen warns on download.
+- Contact review (duplicate scan, card details, vCard export) and the share
+  sheet: the QML has them; the web UI has Add to Contacts and link
+  open/copy. Candidates for a later release.
+- A long-running core process instead of one `blip-core.exe` per call:
+  lower per-poll cost, smaller bundle. An optimisation, not a gap.
+- Upstream: `.gitattributes` and `platform.ts` + `bin-dir.ts` (identical on
+  Linux, enable Windows) are ready to offer Fred. linkpreview.ts has a DNS
+  rebinding gap (checks the IP, then fetch() resolves again) that affects
+  Linux too; to report upstream rather than fork.
 
 ## Where Windows plugs in
 
