@@ -10,7 +10,7 @@ Windows talks to the Mac directly, with its own key.
 |---|---|---|
 | Repo | Fork of nixfred/blip (`chrisandtre/blip-windows`), Windows code under `windows/` | Upstream fixes keep flowing; a PR back to Fred stays possible |
 | UI | Tauri 2 (Rust shell + web UI) | Reuses the ~6k lines of TS core; tray, toasts. Installer is 31.7 MB, mostly the Bun runtime inside blip-core.exe |
-| Core runtime | Bun, compiled to one `.exe` sidecar (`bun build --compile`) | Core uses only 4 Bun APIs; users don't install Bun |
+| Core runtime | Bun, compiled to one `blip-core.exe` (`windows/core`) | Core uses only 4 Bun APIs; users don't install Bun |
 | Transport | blip-mux: one russh connection behind a named pipe; blip-shim forwards to it | Windows OpenSSH has no ControlMaster; a fresh ssh per call is slow |
 | Mac side | Unchanged. New key goes through `blip-dispatch` like the Linux one | No second setup on the Mac |
 | Audience | Public | Installer, docs, and a setup wizard from the start |
@@ -50,10 +50,11 @@ The core never calls ssh directly. It calls shims (`bridge/linux/blip-shim` →
 `~/bin/imsg`, `imsg-send`, …) resolved through `shimPath()` / `bridgeFor()` in
 `source-id.ts`. On Windows:
 
-- `bridgeFor()` returns a Windows transport instead of a bash shim path.
-- The transport keeps one SSH session open and runs each tool as a channel
-  on it (exec `imsg …` through the forced command), streaming stdin/stdout
-  the same way the shim does. Exit 69 still means "Mac offline".
+- The core is unchanged: it spawns `~/bin/imsg` etc. With `HOME=%LOCALAPPDATA%\Blip`
+  that is `blip-shim.exe` installed under each tool name, which hands argv +
+  stdin to `blip-mux` over a named pipe. The mux keeps one SSH connection and
+  runs each call as an exec channel through the forced command. Exit 69 still
+  means "Mac offline".
 - Linux-only helpers get Windows equivalents:
 
 | Linux | Windows |
@@ -61,11 +62,11 @@ The core never calls ssh directly. It calls shims (`bridge/linux/blip-shim` →
 | `notify-send` | Tauri notification plugin (Windows toasts) |
 | `wl-copy` / `wl-paste` | Tauri clipboard plugin |
 | `xdg-open` | Tauri opener plugin |
-| `~/.config/blip`, `~/.cache/blip` | `%APPDATA%\Blip`, `%LOCALAPPDATA%\Blip\cache` |
-| `$XDG_RUNTIME_DIR/blip` | `%TEMP%\Blip` |
+| `~/.config/blip`, `~/.cache/blip`, `~/bin` | the same paths under `%LOCALAPPDATA%\Blip` (the core runs with HOME set there) |
+| `$XDG_RUNTIME_DIR/blip` | `%LOCALAPPDATA%\Blip\run` |
 | hunspell | WebView2 built-in spellcheck |
 | Omarchy bar widget | System tray icon with unread badge |
-| Hyprland keybind | Global shortcut (default `Win+Ctrl+M`, configurable) |
+| Hyprland keybind | Global shortcut `Ctrl+Alt+M` (Win+ combinations are reserved by the shell) |
 
 Every change to shared files stays small and behind a platform check, so
 upstream merges stay clean.
@@ -74,7 +75,7 @@ upstream merges stay clean.
 
 1. **Baseline.** Install Bun, Rust, VS C++ Build Tools. Run the existing test
    suite on Windows and list what fails and why (paths, spawn, Linux tools).
-2. **Transport.** Windows `bridgeFor()` path + persistent `ssh2` session.
+2. **Transport.** `blip-mux` (russh) + `blip-shim` (done).
    Proof: `imsg chats` and one read of a thread from Windows.
 3. **Setup wizard.** Generate `%USERPROFILE%\.ssh\blip_win_ed25519`, print or
    push the `authorized_keys` line with the `blip-dispatch` forced command,
@@ -95,7 +96,7 @@ assume key auth already works: it packs `bridge/mac`, `mac-enroll.sh`, the new
 public key and this PC's Tailscale IPs into one tar and sends it over ONE ssh
 session, so a password-only Mac asks once. After that everything (confinement
 check, `blip-check`, smoke test) goes through the confined key. Config lands in
-`%APPDATA%\Blip\bridge.conf`; the key is `%USERPROFILE%\.ssh\blip_win_ed25519`.
+`%LOCALAPPDATA%\Blip\.config\blip\bridge.conf`; the key is `%USERPROFILE%\.ssh\blip_win_ed25519`.
 The GUI wizard in the app will drive the same steps.
 
 ## Phase 1 baseline (2026-09-22)
