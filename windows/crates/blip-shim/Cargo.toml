@@ -1,0 +1,8 @@
+[package]
+name = "blip-shim"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+blip-wire = { version = "0.1.0", path = "../blip-wire" }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"] }

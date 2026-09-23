@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["crates/blip-wire", "crates/blip-mux", "crates/blip-shim"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

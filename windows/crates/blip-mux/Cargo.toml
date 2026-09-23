@@ -1,0 +1,12 @@
+[package]
+name = "blip-mux"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+blip-wire = { version = "0.1.0", path = "../blip-wire" }
+getrandom = "0.3"
+russh = { version = "0.63", default-features = false, features = ["ring", "flate2"] }
+tokio = { version = "1", features = ["full"] }
+windows-sys = { version = "0.61", features = ["Win32_Security", "Win32_Security_Authorization", "Win32_Foundation", "Win32_System_Pipes", "Win32_Storage_FileSystem"] }

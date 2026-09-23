@@ -6,7 +6,8 @@ blip-setup.ps1 - Windows-side first run for Blip. Idempotent; safe to re-run.
 
 Steps:
   0. prerequisites          Windows OpenSSH client and tar (both ship with Windows 10 1803+)
-  1. %APPDATA%\Blip\bridge.conf   host=, remote_bin=, python=, key= (other keys survive a re-run)
+  1. %LOCALAPPDATA%\Blip\.config\blip\bridge.conf   host=, remote_bin=, python=, key=
+                            (other keys survive a re-run)
   2. %USERPROFILE%\.ssh\blip_win_ed25519   this PC's own key; your everyday keys are untouched
   3. Mac install + enroll   ONE ssh session: copies bridge/mac to ~/.blip/src, runs install.sh,
                             adds the key confined to blip-dispatch (see mac-enroll.sh).
@@ -65,7 +66,9 @@ function Invoke-Quiet([string]$exe, [string[]]$argv) {
 # ---------------------------------------------------------------- 1. config
 # bridge.conf is DATA: parsed as key=value lines, never executed. Keys this
 # script does not own (country_code, automation, anything set by hand) survive.
-$confDir = Join-Path $env:APPDATA 'Blip'
+# Blip's Windows home is %LOCALAPPDATA%\Blip; the app runs the core with HOME set there,
+# so this is the core's own ~/.config/blip/bridge.conf.
+$confDir = Join-Path $env:LOCALAPPDATA 'Blip\.config\blip'
 $conf = Join-Path $confDir 'bridge.conf'
 $lines = New-Object System.Collections.Generic.List[string]
 if (Test-Path $conf) { foreach ($l in [IO.File]::ReadAllLines($conf)) { $lines.Add($l) } }
