@@ -9,11 +9,40 @@ Windows talks to the Mac directly, with its own key.
 | Question | Choice | Why |
 |---|---|---|
 | Repo | Fork of nixfred/blip (`chrisandtre/blip-windows`), Windows code under `windows/` | Upstream fixes keep flowing; a PR back to Fred stays possible |
-| UI | Tauri 2 (Rust shell + web UI) | Reuses the ~6k lines of TS core; ~10–15 MB installer; tray, toasts, Mica |
+| UI | Tauri 2 (Rust shell + web UI) | Reuses the ~6k lines of TS core; tray, toasts. Installer is 31.7 MB, mostly the Bun runtime inside blip-core.exe |
 | Core runtime | Bun, compiled to one `.exe` sidecar (`bun build --compile`) | Core uses only 4 Bun APIs; users don't install Bun |
-| Transport | Persistent SSH connection (`ssh2` in the sidecar) | Windows OpenSSH has no ControlMaster; a fresh ssh per call is slow |
+| Transport | blip-mux: one russh connection behind a named pipe; blip-shim forwards to it | Windows OpenSSH has no ControlMaster; a fresh ssh per call is slow |
 | Mac side | Unchanged. New key goes through `blip-dispatch` like the Linux one | No second setup on the Mac |
 | Audience | Public | Installer, docs, and a setup wizard from the start |
+
+## Status (2026-09-22)
+
+Working, verified against the real gateway Mac, installed from the built setup.exe:
+
+- Setup from scratch (`blip-setup.ps1`, or the app's first-run screen): one password prompt.
+- `blip-mux` + `blip-shim`: ping 95 ms, `imsg recent` 230 ms warm (Mac-side
+  Python startup dominates, same as Linux), cold start 0.54 s, offline fails
+  fast with exit 69.
+- Core on Windows: `bun test` 609 pass / 15 skip (Linux-only) / 0 fail.
+- App: conversation list, pinned tiles, contact photos, threads with every
+  bubble field, inline images, link cards, search, new chat, read marks,
+  tray with unread/offline icons, notifications (allowlist-gated by the
+  collector), security codes (5 min, memory only), keyboard navigation.
+- Installer: per-user NSIS; bundles blip-core/mux/shim and the Mac bridge.
+
+Not yet verified, because it sends real messages and needs a person at the
+keyboard: text send, file send, pasted screenshot, group send, failed send.
+
+Next:
+1. Verify sends. Push `windows-client` so CI runs `bun test` on Linux too.
+2. Tray popout (the Omarchy panel equivalent). Today the tray toggles the window.
+3. Notification click opens the conversation; start at login; remember window size.
+4. Contact review / save and the share sheet (in the QML, not yet in the web UI).
+5. Code signing (Azure Trusted Signing) so SmartScreen does not warn.
+6. A long-running core process instead of one `blip-core.exe` per call:
+   lower per-poll cost, and a chance to shrink the bundle.
+7. Upstream PRs to nixfred/blip: `.gitattributes`; `platform.ts` + `bin-dir.ts`
+   (identical on Linux, enable Windows).
 
 ## Where Windows plugs in
 
