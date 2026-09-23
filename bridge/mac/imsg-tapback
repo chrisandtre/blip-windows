@@ -191,6 +191,43 @@ function run(argv) {
   }
   var wins = p.windows();
   if (!wins.length) return JSON.stringify({ ok: false, why: "Messages has no window open" });
+  if (mode === "diag") {
+    // Structure only, never text: roles, counts, selection flags, action
+    // names (first line). AXDescription holds message text, so it is never
+    // returned; only whether it is empty.
+    function sum(el) {
+      return { role: attr(el, "AXRole"), sub: attr(el, "AXSubrole"), id: attr(el, "AXIdentifier"),
+               sel: attr(el, "AXSelected"), foc: attr(el, "AXFocused"), hasDesc: !!attr(el, "AXDescription"),
+               n: kids(el).length, acts: names(el).map(function (s) { return s.split("\n")[0]; }) };
+    }
+    var out = { windows: wins.length, transcripts: [] };
+    for (var w = 0; w < wins.length; w++) {
+      var queue = [wins[w]], seen = 0;
+      while (queue.length && seen < 1500) {
+        var el = queue.shift(); seen++;
+        if (attr(el, "AXIdentifier") === "TranscriptCollectionView") {
+          var cells = kids(el), last = [];
+          var selKids = null; try { selKids = el.attributes.byName("AXSelectedChildren").value().length; } catch (e) {}
+          for (var c = Math.max(0, cells.length - 6); c < cells.length; c++) {
+            var cs = sum(cells[c]); var k0 = kids(cells[c]);
+            cs.first = k0.length ? sum(k0[0]) : null;
+            cs.firstFirst = k0.length && kids(k0[0]).length ? sum(kids(k0[0])[0]) : null;
+            last.push(cs);
+          }
+          var selIdx = [];
+          for (var c = 0; c < cells.length; c++) {
+            var f0 = kids(cells[c])[0];
+            if (attr(cells[c], "AXSelected") === true) selIdx.push("cell:" + c);
+            if (f0 && attr(f0, "AXSelected") === true) selIdx.push("first:" + c);
+            if (f0 && attr(f0, "AXFocused") === true) selIdx.push("focused:" + c);
+          }
+          out.transcripts.push({ window: w, desc: attr(el, "AXDescription"), cells: cells.length, selectedChildren: selKids, selected: selIdx, last: last });
+        }
+        var k = kids(el); for (var i = 0; i < k.length; i++) queue.push(k[i]);
+      }
+    }
+    return JSON.stringify({ ok: true, diag: out });
+  }
   var transcript = null;
   for (var w = 0; w < wins.length && !transcript; w++) {
     var t = find(wins[w], "TranscriptCollectionView", 600);
@@ -247,10 +284,12 @@ def jxa(mode, titles, picker_id, want_selected):
         return {"ok": False, "why": (r.stderr or r.stdout or "osascript failed").strip().splitlines()[-1]}
 
 
-def select_message(guid):
+def select_message(guid, overlay=False):
     """Deep-link to the exact message; Messages scrolls to it and selects it.
-    `open -g` keeps Messages from taking the foreground where it can."""
-    url = "imessage://open?message-guid=" + guid
+    With overlay it opens in the reply-transcript pop-over instead (Beeper's
+    default on macOS 12+). `open -g` keeps Messages from taking the
+    foreground where it can."""
+    url = "imessage://open?message-guid=" + guid + ("&overlay=1" if overlay else "")
     try:
         r = subprocess.run(["open", "-g", url], capture_output=True, timeout=30)
     except subprocess.TimeoutExpired:
@@ -324,6 +363,20 @@ def main():
               "picker": [names.get(t, t) for t in PICKER_TITLES] + [t for t in PICKER_TITLES if names.get(t, t) != t]}
 
     prev = READ.frontmost()
+    if opts["probe"]:
+        # Diagnostic: structure only (roles, counts, selection flags, action
+        # names), in both deep-link modes. Never message text.
+        try:
+            report = {"titles": titles}
+            if select_message(guid):
+                die(75, "could not open the message")
+            report["main"] = jxa("diag", titles, picker_id, True)
+            if not select_message(guid, overlay=True):
+                report["overlay"] = jxa("diag", titles, picker_id, True)
+        finally:
+            READ.restore_front(prev)
+        print(json.dumps(report, ensure_ascii=False))
+        return
     try:
         why = select_message(guid)
         if why:
