@@ -1228,6 +1228,11 @@ export class View {
   private globalKey(e: KeyboardEvent) {
     const inComposer = document.activeElement === this.composer;
     const inSearch = document.activeElement === this.searchEl;
+    // Typing in any field (the first-run setup, the add-contact form, a
+    // future one) is typing, not a shortcut: "r" and "n" were being eaten.
+    const el = e.target as HTMLElement | null;
+    if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) && el !== this.composer && el !== this.searchEl) return;
+    if (document.querySelector(".setup, .modal")) return;
     if (e.ctrlKey && !e.altKey && /^[1-9]$/.test(e.key)) {
       const t = this.threads.filter((x) => x.pinned)[Number(e.key) - 1];
       if (t) { e.preventDefault(); this.openThread(t, true); }
