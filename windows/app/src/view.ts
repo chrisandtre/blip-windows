@@ -309,6 +309,9 @@ export class View {
       tile.onclick = () => this.openThread(t, true);
       this.pinnedEl.append(tile);
     });
+    // Emptying the list clamps its scroll to 0; put it back after the rebuild.
+    const keep = this.listEl.scrollTop;
+    queueMicrotask(() => { this.listEl.scrollTop = keep; });
     this.listEl.textContent = "";
     if (this.mode !== "list") return this.renderHits();
     if (!this.online) return;
@@ -353,21 +356,32 @@ export class View {
     this.avatarTimer = window.setTimeout(() => this.fetchAvatars(), 30);
   }
 
+  /** Small batches, rendered as each lands. The QML streams avatar.ts's
+   *  JSONL instead; one big batch waited on as a whole timed out whenever the
+   *  "no photo" markers were older than 15 min and every handle went back to
+   *  the Mac (~0.3 s each), and then every row fell back to initials. */
+  private fetchingAvatars = false;
   private async fetchAvatars() {
-    const keys = [...this.avatarWanted].filter((k) => !this.avatars.has(k)).slice(0, 1024);
-    if (!keys.length) return;
-    const out = await core("avatar", ["--batch", "--retry"], keys.join("\n") + "\n", 120_000).catch(() => null);
-    const got = new Set<string>();
-    for (const line of (out?.stdout || "").split("\n")) {
-      try {
-        const r = JSON.parse(line) as { handle: string; ok: boolean; url: string };
-        this.avatars.set(r.handle, r.ok ? r.url : "");
-        got.add(r.handle);
-      } catch { /* not a result line */ }
+    if (this.fetchingAvatars) return;
+    this.fetchingAvatars = true;
+    try {
+      for (;;) {
+        const keys = [...this.avatarWanted].filter((k) => !this.avatars.has(k)).slice(0, 16);
+        if (!keys.length) break;
+        const out = await core("avatar", ["--batch", "--retry"], keys.join("\n") + "\n", 60_000).catch(() => null);
+        for (const line of (out?.stdout || "").split("\n")) {
+          try {
+            const r = JSON.parse(line) as { handle: string; ok: boolean; url: string };
+            this.avatars.set(r.handle, r.ok ? r.url : "");
+          } catch { /* not a result line */ }
+        }
+        for (const k of keys) if (!this.avatars.has(k)) this.avatars.set(k, "");
+        this.renderList();
+        this.renderHead();
+      }
+    } finally {
+      this.fetchingAvatars = false;
     }
-    for (const k of keys) if (!got.has(k)) this.avatars.set(k, "");
-    this.renderList();
-    this.renderHead();
   }
 
   private retryBareAvatars() {

@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Blip",
+  "productName": "Blip for Windows",
   "version": "0.1.0",
   "identifier": "io.github.chrisandtre.blip",
   "build": {
@@ -25,13 +25,49 @@
       "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost",
       "assetProtocol": {
         "enable": true,
-        "scope": ["$LOCALDATA/Blip/.cache/**"]
+        "scope": [
+          "$LOCALDATA/Blip/.cache/**"
+        ]
       }
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"]
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "../../target/release/blip-core.exe": "blip-core.exe",
+      "../../target/release/blip-mux.exe": "blip-mux.exe",
+      "../../target/release/blip-shim.exe": "blip-shim.exe",
+      "../../scripts/blip-setup.ps1": "setup/blip-setup.ps1",
+      "../../scripts/mac-enroll.sh": "setup/mac-enroll.sh",
+      "../../../bridge/mac/imsg": "setup/bridge/mac/imsg",
+      "../../../bridge/mac/imsg-send": "setup/bridge/mac/imsg-send",
+      "../../../bridge/mac/imsg-read": "setup/bridge/mac/imsg-read",
+      "../../../bridge/mac/contacts": "setup/bridge/mac/contacts",
+      "../../../bridge/mac/contact-repair.js": "setup/bridge/mac/contact-repair.js",
+      "../../../bridge/mac/contact-save": "setup/bridge/mac/contact-save",
+      "../../../bridge/mac/contact-save.js": "setup/bridge/mac/contact-save.js",
+      "../../../bridge/mac/tcc-check": "setup/bridge/mac/tcc-check",
+      "../../../bridge/mac/blip-check": "setup/bridge/mac/blip-check",
+      "../../../bridge/mac/blip-dispatch": "setup/bridge/mac/blip-dispatch",
+      "../../../bridge/mac/calling_codes.py": "setup/bridge/mac/calling_codes.py",
+      "../../../bridge/mac/install.sh": "setup/bridge/mac/install.sh"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    },
+    "publisher": "Blip for Windows contributors",
+    "shortDescription": "iMessage on Windows, through your Mac",
+    "copyright": "MIT"
   }
 }

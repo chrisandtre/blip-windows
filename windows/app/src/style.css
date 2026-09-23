@@ -142,3 +142,16 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .menu { position: fixed; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px #0003; padding: 4px; z-index: 10; display: flex; flex-direction: column; min-width: 160px; }
 .menu button { padding: 6px 10px; border-radius: 6px; }
 .menu button:hover { background: var(--hover); }
+
+/* ---- first-run setup */
+.setup { position: fixed; inset: 0; background: var(--bg); display: grid; place-items: center; z-index: 20; }
+.setup-card { width: min(460px, 90vw); user-select: text; }
+.setup-card h1 { font: 600 26px "Segoe UI Variable Display", "Segoe UI", sans-serif; margin: 0 0 10px; }
+.setup-card p { color: var(--muted); }
+.setup-card label { display: flex; flex-direction: column; gap: 6px; font-weight: 600; margin: 18px 0 4px; }
+.setup-card input { padding: 9px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--side); color: var(--fg); font: inherit; outline: none; }
+.setup-card input:focus { border-color: var(--blue); }
+.setup-hint { font-size: 12px; }
+.setup-card button { background: var(--blue); color: #fff; border-radius: 8px; padding: 9px 18px; font-weight: 600; margin-top: 6px; }
+.setup-card button:disabled { opacity: .5; }
+.setup-msg { min-height: 20px; }

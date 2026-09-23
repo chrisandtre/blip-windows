@@ -13,7 +13,7 @@
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -51,20 +51,105 @@ fn bin_dir() -> PathBuf {
     blip_home().join("bin")
 }
 
-/// How to start a core script. A packaged build ships `blip-core.exe`
-/// (the core compiled with Bun) beside the app; a dev build runs the repo's
-/// .ts files with the bun on PATH.
+/// The installed app's resource dir (blip-core.exe, blip-mux.exe,
+/// blip-shim.exe, setup/). Unset in a dev run that has not bundled them.
+static RESOURCES: OnceLock<PathBuf> = OnceLock::new();
+
+fn repo_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("..")
+}
+
+fn resource(name: &str) -> Option<PathBuf> {
+    RESOURCES.get().map(|r| r.join(name)).filter(|p| p.exists())
+}
+
+/// How to start a core script. An installed build ships `blip-core.exe`
+/// (the core compiled with Bun); a dev build runs the repo's .ts files with
+/// the bun on PATH.
 fn core_command(script: &str) -> Command {
-    let exe_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf()));
-    if let Some(core) = exe_dir.map(|d| d.join("blip-core.exe")).filter(|p| p.exists()) {
+    // Debug builds always run the live .ts files, never a stale bundled core.
+    if let Some(core) = resource("blip-core.exe").filter(|_| !cfg!(debug_assertions)) {
         let mut c = Command::new(core);
         c.arg(script);
         return c;
     }
-    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("..");
+    let repo = repo_dir();
     let mut c = Command::new("bun");
     c.arg(repo.join(format!("{script}.ts"))).current_dir(repo);
     c
+}
+
+/// Keep %LOCALAPPDATA%\Blip\bin (the core's ~/bin) matching the installed
+/// shims and mux: the shim under each tool name, like bridge/linux/blip-shim.
+/// An update can find the old mux still running from there; Windows will not
+/// overwrite a running exe but will rename it, so it is moved aside first.
+fn sync_bin() {
+    let (Some(shim), Some(mux)) = (resource("blip-shim.exe"), resource("blip-mux.exe")) else { return };
+    let bin = bin_dir();
+    let _ = std::fs::create_dir_all(&bin);
+    let mut pairs: Vec<(PathBuf, PathBuf)> = blip_wire::TOOLS.iter().map(|t| (shim.clone(), bin.join(format!("{t}.exe")))).collect();
+    pairs.push((mux, bin.join("blip-mux.exe")));
+    for (src, dst) in pairs {
+        let same = match (std::fs::read(&src), std::fs::read(&dst)) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        };
+        if same {
+            continue;
+        }
+        if std::fs::copy(&src, &dst).is_err() {
+            let old = dst.with_extension("exe.old");
+            let _ = std::fs::remove_file(&old);
+            if std::fs::rename(&dst, &old).is_ok() {
+                let _ = std::fs::copy(&src, &dst);
+            }
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct SetupState {
+    configured: bool,
+    host: String,
+    shims: bool,
+}
+
+/// Is there a bridge.conf with a host, and are the shims in place?
+#[tauri::command]
+fn setup_state() -> SetupState {
+    let conf = std::fs::read_to_string(blip_wire::conf_path()).unwrap_or_default();
+    let host = conf
+        .lines()
+        .filter_map(|l| l.split('#').next())
+        .filter_map(|l| l.trim().strip_prefix("host="))
+        .map(|v| v.trim().trim_matches('\'').trim_matches('"').to_string())
+        .last()
+        .unwrap_or_default();
+    SetupState { configured: !host.is_empty(), host, shims: bin_dir().join("imsg.exe").exists() }
+}
+
+/// Run blip-setup.ps1 in its own console window, where ssh can ask for the
+/// Mac's password and fingerprint itself; resolves with its exit code.
+#[tauri::command]
+async fn run_setup(host: String) -> Result<i32, String> {
+    let ok = !host.is_empty()
+        && host.split('@').all(|p| !p.is_empty() && !p.starts_with('-') && p.chars().all(|c| c.is_ascii_alphanumeric() || ".-_:".contains(c)))
+        && host.matches('@').count() <= 1;
+    if !ok {
+        return Err("expected [user@]host".into());
+    }
+    let script = resource("setup/blip-setup.ps1").unwrap_or_else(|| repo_dir().join("windows").join("scripts").join("blip-setup.ps1"));
+    const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+    let status = Command::new("powershell.exe")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(script)
+        .arg(&host)
+        .arg("-FromApp")
+        .creation_flags(CREATE_NEW_CONSOLE)
+        .status()
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(status.code().unwrap_or(-1))
 }
 
 fn prepare(c: &mut Command) {
@@ -260,8 +345,12 @@ pub fn run_app() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(Tray(Mutex::new(None)))
         .manage(Watching(AtomicBool::new(false)))
-        .invoke_handler(tauri::generate_handler![core, shim, start_watch, set_status, show_main, write_draft])
+        .invoke_handler(tauri::generate_handler![core, shim, start_watch, set_status, show_main, write_draft, setup_state, run_setup])
         .setup(|app| {
+            if let Ok(dir) = app.path().resource_dir() {
+                let _ = RESOURCES.set(dir);
+            }
+            sync_bin();
             let open = MenuItem::with_id(app, "open", "Open Blip", true, None::<&str>)?;
             let read = MenuItem::with_id(app, "mark-all-read", "Mark all as read", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit Blip", true, None::<&str>)?;

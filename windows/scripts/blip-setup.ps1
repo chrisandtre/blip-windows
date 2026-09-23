@@ -21,8 +21,12 @@ ASCII only on purpose: 5.1 reads a BOM-less script as the ANSI code page.
 [CmdletBinding()]
 param(
   [Parameter(Position = 0)][string]$MacHost,
-  [switch]$UpdateMac
+  [switch]$UpdateMac,
+  # Set by the Blip app, which opens this in its own console: pause at the end
+  # so the result can be read before the window closes.
+  [switch]$FromApp
 )
+if ($FromApp) { $host.UI.RawUI.WindowTitle = 'Blip setup' }
 
 $ErrorActionPreference = 'Stop'
 # 7.3+ passes native arguments differently from 5.1 (empty strings, embedded quotes).
@@ -32,9 +36,15 @@ try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch { }
 
 function Ok($m)   { Write-Host "[ok] $m" -ForegroundColor Green }
 function Info($m) { Write-Host " -   $m" }
-function Fail($m, [int]$code = 1) { Write-Host "[x]  $m" -ForegroundColor Red; exit $code }
+function Done([int]$code) {
+  if ($FromApp) { [void](Read-Host "`nPress Enter to close") }
+  exit $code
+}
+function Fail($m, [int]$code = 1) { Write-Host "[x]  $m" -ForegroundColor Red; Done $code }
 
-$repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+# The Blip installer ships bridge\mac beside this script; a checkout has it
+# two levels up.
+$repo = if (Test-Path (Join-Path $PSScriptRoot 'bridge\mac\install.sh')) { $PSScriptRoot } else { (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path }
 $macSrc = Join-Path $repo 'bridge\mac'
 $enroll = Join-Path $PSScriptRoot 'mac-enroll.sh'
 
@@ -208,3 +218,4 @@ Ok "bridge is up - $n message(s) readable through the Blip key"
 Write-Host ''
 Info 'Setup done. The Windows app reads its settings from:'
 Info "  $conf"
+Done 0
