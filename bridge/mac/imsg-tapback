@@ -85,6 +85,30 @@ def db():
     return con
 
 
+def target_text(con, guid):
+    """The message's text as imsg reads it (text column, else attributedBody)."""
+    row = con.execute("SELECT text, attributedBody FROM message WHERE guid = ?", (guid,)).fetchone()
+    if not row:
+        return ""
+    try:
+        return row["text"] or READ.imsg_module().decode_attributed_body(row["attributedBody"]) or ""
+    except Exception:
+        return row["text"] or ""
+
+
+def write_text_file(text):
+    """0600, in the owner-only ~/.blip; removed as soon as the UI step ends."""
+    if not text.strip():
+        return ""
+    folder = os.path.expanduser("~/.blip")
+    os.makedirs(folder, mode=0o700, exist_ok=True)
+    path = os.path.join(folder, f"tapback-{os.getpid()}.txt")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
+    return path
+
+
 def target_row(con, guid):
     return con.execute(
         """SELECT m.ROWID, c.chat_identifier AS chat
@@ -167,16 +191,40 @@ def localized_titles():
 JXA = r"""
 function run(argv) {
   var mode = argv[0], titles = JSON.parse(argv[1]), pickerId = argv[2], wantSelected = argv[3] === "1";
+  // The target's text, for the fallback match, comes from a 0600 file (never
+  // argv, never returned): lowercased, whitespace collapsed, first 40 chars.
+  var snippet = "";
+  if (argv[4]) {
+    ObjC.import("Foundation");
+    var s = $.NSString.stringWithContentsOfFileEncodingError(argv[4], $.NSUTF8StringEncoding, null);
+    if (s) snippet = norm(s.js).slice(0, 40);
+  }
+  function norm(t) { return String(t || "").replace(/\s+/g, " ").trim().toLowerCase(); }
+  function textMatches(cells) {
+    var hits = [];
+    if (snippet.length < 4) return hits;
+    for (var c = cells.length - 1; c >= 0; c--) {
+      var f0 = kids(cells[c])[0];
+      var d = norm(attr(cells[c], "AXDescription")) + " " + norm(f0 ? attr(f0, "AXDescription") : "");
+      if (d.indexOf(snippet) >= 0) hits.push(f0 || cells[c]);
+    }
+    return hits;
+  }
   var se = Application("System Events");
   var p = se.processes.byName("Messages");
   function attr(el, name) { try { return el.attributes.byName(name).value(); } catch (e) { return null; } }
   function kids(el) { try { return el.uiElements(); } catch (e) { return []; } }
   function names(el) { try { return el.actions().map(function (a) { return a.name(); }); } catch (e) { return []; } }
+  // Every attribute read is an Apple Event, so the walk is pruned: lists,
+  // tables and outlines that are not the target (the conversation sidebar,
+  // hundreds of rows) are never entered.
+  var PRUNE = { AXTable: 1, AXOutline: 1, AXList: 1, AXRow: 1, AXCell: 1, AXStaticText: 1, AXImage: 1, AXButton: 1, AXTextArea: 1, AXTextField: 1 };
   function find(root, id, budget) {
     var queue = [root], seen = 0;
     while (queue.length && seen < budget) {
       var el = queue.shift(); seen++;
       if (attr(el, "AXIdentifier") === id) return el;
+      if (PRUNE[attr(el, "AXRole")]) continue;
       var k = kids(el); for (var i = 0; i < k.length; i++) queue.push(k[i]);
     }
     return null;
@@ -203,9 +251,11 @@ function run(argv) {
     var out = { windows: wins.length, transcripts: [] };
     for (var w = 0; w < wins.length; w++) {
       var queue = [wins[w]], seen = 0;
-      while (queue.length && seen < 1500) {
+      while (queue.length && seen < 700) {
         var el = queue.shift(); seen++;
-        if (attr(el, "AXIdentifier") === "TranscriptCollectionView") {
+        var isT = attr(el, "AXIdentifier") === "TranscriptCollectionView";
+        if (!isT && PRUNE[attr(el, "AXRole")]) continue;
+        if (isT) {
           var cells = kids(el), last = [];
           var selKids = null; try { selKids = el.attributes.byName("AXSelectedChildren").value().length; } catch (e) {}
           for (var c = Math.max(0, cells.length - 6); c < cells.length; c++) {
@@ -221,7 +271,8 @@ function run(argv) {
             if (f0 && attr(f0, "AXSelected") === true) selIdx.push("first:" + c);
             if (f0 && attr(f0, "AXFocused") === true) selIdx.push("focused:" + c);
           }
-          out.transcripts.push({ window: w, desc: attr(el, "AXDescription"), cells: cells.length, selectedChildren: selKids, selected: selIdx, last: last });
+          out.transcripts.push({ window: w, textMatches: textMatches(cells).length, role: attr(el, "AXRole"), desc: attr(el, "AXDescription"), cells: cells.length, selectedChildren: selKids, selected: selIdx, last: last, visited: seen });
+          continue;
         }
         var k = kids(el); for (var i = 0; i < k.length; i++) queue.push(k[i]);
       }
@@ -241,7 +292,15 @@ function run(argv) {
     var first = kids(cells[c])[0];
     if (first && attr(first, "AXSelected") === true) cell = first;
   }
-  if (!cell) return JSON.stringify({ ok: false, why: "the message is not selected on screen (it may not be rendered)" });
+  var via = "selected";
+  if (!cell) {
+    // Fallback (#69's approach): the one on-screen cell whose accessibility
+    // description contains the message's text. Exactly one, or nothing.
+    var hits = textMatches(cells);
+    if (hits.length === 1) { cell = hits[0]; via = "text"; }
+    else if (hits.length > 1) return JSON.stringify({ ok: false, why: "more than one message on screen matches; not guessing" });
+  }
+  if (!cell) return JSON.stringify({ ok: false, why: "the message is not selected on screen and no on-screen message matches its text" });
   // Actions sit on the cell or on its first child, depending on the build.
   var targets = [cell].concat(kids(cell).slice(0, 1));
   if (mode === "probe") {
@@ -251,7 +310,7 @@ function run(argv) {
   }
   for (var i = 0; i < targets.length; i++) {
     var a = actionOn(targets[i], titles.direct);
-    if (a) { a.perform(); return JSON.stringify({ ok: true, via: "action" }); }
+    if (a) { a.perform(); return JSON.stringify({ ok: true, via: "action/" + via }); }
   }
   // No direct action on this build: open the picker and press its button.
   var opener = null;
@@ -272,10 +331,14 @@ function run(argv) {
 """
 
 
+TEXT_FILE = ""
+
+
 def jxa(mode, titles, picker_id, want_selected):
     try:
         r = subprocess.run(["osascript", "-l", "JavaScript", "-e", JXA, mode, json.dumps(titles), picker_id,
-                            "1" if want_selected else "0"], capture_output=True, text=True, timeout=60)
+                            "1" if want_selected else "0", TEXT_FILE], capture_output=True, text=True,
+                           timeout=150 if mode == "diag" else 60)
     except subprocess.TimeoutExpired:
         return {"ok": False, "why": "System Events timed out"}
     try:
@@ -346,8 +409,11 @@ def main():
             if not any(r["chat"] in cluster for r in rows):
                 die(64, "that message is not in that conversation")
         current, top = my_state(con, guid)
+        text = target_text(con, guid)
     finally:
         con.close()
+    global TEXT_FILE
+    TEXT_FILE = write_text_file(text)
 
     add_type, remove_type = 2000 + k, 3000 + k
     if not opts["probe"]:
@@ -412,3 +478,9 @@ if __name__ == "__main__":
             main()
     except (OSError, TimeoutError) as exc:
         die(75, str(exc))
+    finally:
+        if TEXT_FILE:
+            try:
+                os.unlink(TEXT_FILE)
+            except OSError:
+                pass
