@@ -280,16 +280,43 @@ fn set_status(app: AppHandle, tray: State<'_, Tray>, unread: u32, online: bool) 
     }
 }
 
-fn toggle_main(app: &AppHandle) {
-    if let Some(w) = app.get_webview_window("main") {
-        if w.is_visible().unwrap_or(false) && w.is_focused().unwrap_or(false) {
-            let _ = w.hide();
-        } else {
-            let _ = w.show();
-            let _ = w.unminimize();
-            let _ = w.set_focus();
-        }
+/// When the popout last hid itself on losing focus. Clicking the tray icon
+/// while it is open blurs it first; that click must close it, not reopen it.
+static PANEL_BLURRED: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+/// The tray popout (Panel.qml's equivalent): toggled by a left click, placed
+/// against the tray icon inside the work area, above a bottom taskbar and
+/// below a top one.
+fn toggle_panel(app: &AppHandle, rect: tauri::Rect) {
+    let Some(panel) = app.get_webview_window("panel") else { return };
+    if panel.is_visible().unwrap_or(false) {
+        let _ = panel.hide();
+        return;
     }
+    if PANEL_BLURRED.lock().unwrap().is_some_and(|t| t.elapsed() < Duration::from_millis(300)) {
+        return;
+    }
+    let icon = rect.position.to_physical::<f64>(1.0);
+    let icon_size = rect.size.to_physical::<f64>(1.0);
+    if let Ok(size) = panel.outer_size() {
+        let (w, h) = (size.width as f64, size.height as f64);
+        let mut x = icon.x + icon_size.width / 2.0 - w / 2.0;
+        let mut y = icon.y - h - 8.0;
+        if let Ok(Some(m)) = app.monitor_from_point(icon.x, icon.y) {
+            let wa = m.work_area();
+            let (left, top) = (wa.position.x as f64, wa.position.y as f64);
+            let (right, bottom) = (left + wa.size.width as f64, top + wa.size.height as f64);
+            if icon.y < top + (bottom - top) / 2.0 {
+                y = icon.y + icon_size.height + 8.0; // taskbar on top
+            }
+            x = x.clamp(left + 8.0, right - w - 8.0);
+            y = y.clamp(top + 8.0, bottom - h - 8.0);
+        }
+        let _ = panel.set_position(tauri::PhysicalPosition::new(x, y));
+    }
+    let _ = panel.show();
+    let _ = panel.set_focus();
+    let _ = app.emit_to("panel", "blip://panel-shown", ());
 }
 
 /// A Windows toast. Clicking it opens that conversation ("" just shows the
@@ -376,6 +403,8 @@ pub fn run_app() {
             tauri_plugin_window_state::Builder::default()
                 // Not visibility: quitting from the tray must not mean "start hidden".
                 .with_state_flags(tauri_plugin_window_state::StateFlags::all() & !tauri_plugin_window_state::StateFlags::VISIBLE)
+                // The popout is placed against the tray icon every time it opens.
+                .with_denylist(&["panel"])
                 .build(),
         )
         // Off until chosen in the tray menu; a login start goes straight to the tray.
@@ -419,23 +448,35 @@ pub fn run_app() {
                     "quit" => app.exit(0),
                     _ => {}
                 })
-                .on_tray_icon_event(|tray, e| {
-                    if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = e {
-                        toggle_main(tray.app_handle());
+                // Left click: the popout. Double click: the full window (as on the Omarchy bar).
+                .on_tray_icon_event(|tray, e| match e {
+                    TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, rect, .. } => {
+                        toggle_panel(tray.app_handle(), rect);
                     }
+                    TrayIconEvent::DoubleClick { button: MouseButton::Left, .. } => {
+                        if let Some(p) = tray.app_handle().get_webview_window("panel") {
+                            let _ = p.hide();
+                        }
+                        show_main(tray.app_handle().clone());
+                    }
+                    _ => {}
                 })
                 .build(app)?;
             *app.state::<Tray>().0.lock().unwrap() = Some(tray);
             Ok(())
         })
-        .on_window_event(|window, event| {
-            // Closing the window keeps Blip in the tray, like the Omarchy bar widget.
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "main" {
-                    api.prevent_close();
-                    let _ = window.hide();
-                }
+        .on_window_event(|window, event| match event {
+            // Closing a window keeps Blip in the tray, like the Omarchy bar widget.
+            WindowEvent::CloseRequested { api, .. } => {
+                api.prevent_close();
+                let _ = window.hide();
             }
+            // The popout goes away when anything else is clicked.
+            WindowEvent::Focused(false) if window.label() == "panel" => {
+                *PANEL_BLURRED.lock().unwrap() = Some(std::time::Instant::now());
+                let _ = window.hide();
+            }
+            _ => {}
         })
         .run(tauri::generate_context!())
         .expect("error while running Blip");

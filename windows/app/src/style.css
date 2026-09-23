@@ -41,10 +41,10 @@ body {
   user-select: none;
 }
 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; text-align: left; }
-#app { display: grid; grid-template-columns: 320px 1fr; height: 100vh; }
+#app { display: grid; grid-template-columns: 320px minmax(0, 1fr); height: 100vh; }
 
 /* ---- sidebar */
-.side { background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+.side { background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .side-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 14px 6px; }
 .brand { font: 600 20px "Segoe UI Variable Display", "Segoe UI", sans-serif; }
 .icon-btn { width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; font-size: 18px; }
@@ -155,3 +155,12 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .setup-card button { background: var(--blue); color: #fff; border-radius: 8px; padding: 9px 18px; font-weight: 600; margin-top: 6px; }
 .setup-card button:disabled { opacity: .5; }
 .setup-msg { min-height: 20px; }
+
+/* ---- tray popout (compact): one column, list or conversation */
+#app.compact { grid-template-columns: minmax(0, 1fr); border: 1px solid var(--line); }
+#app.compact .conv { display: none; }
+#app.compact.in-thread .side { display: none; }
+#app.compact.in-thread .conv { display: flex; }
+#app.compact .side { border-right: 0; }
+.conv-head { position: relative; }
+.conv-head .back { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); }

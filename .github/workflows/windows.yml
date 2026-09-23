@@ -3,6 +3,7 @@ on:
   pull_request:
   push:
     branches: [main, windows-client]
+    tags: ["win-v*"]
 jobs:
   core:
     # The shared TypeScript core must stay green on BOTH platforms: the
@@ -18,7 +19,10 @@ jobs:
         with:
           bun-version: latest
       - run: bun test
-  rust:
+
+  crates:
+    # The transport crates. The app crate is built by the installer job: its
+    # build script needs the bundled resources, which only that job makes.
     runs-on: windows-latest
     defaults:
       run:
@@ -29,11 +33,43 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: windows
-      - run: cargo test --release
-      - run: cargo build --release
+      - run: cargo test --release -p blip-wire -p blip-mux -p blip-shim
       - name: PowerShell setup script parses on 5.1
         shell: powershell
         run: |
           $e = $null
           [void][System.Management.Automation.Language.Parser]::ParseFile("$PWD\scripts\blip-setup.ps1", [ref]$null, [ref]$e)
           if ($e) { $e | ForEach-Object { $_.Message }; exit 1 }
+
+  installer:
+    needs: [core, crates]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: windows
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Build the installer
+        shell: pwsh
+        run: windows/scripts/build-release.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: blip-for-windows-installer
+          path: windows/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+      # A win-v* tag makes a DRAFT release with the installer attached; a
+      # person reads it over and publishes it.
+      - name: Draft a release
+        if: startsWith(github.ref, 'refs/tags/win-v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $exe = Get-ChildItem windows/target/release/bundle/nsis/*.exe | Select-Object -First 1
+          gh release create "${{ github.ref_name }}" $exe.FullName --draft --title "Blip for Windows ${{ github.ref_name }}" --notes-file windows/RELEASE_NOTES.md
+    permissions:
+      contents: write

@@ -10,7 +10,14 @@ import {
   core, fileSrc, filePath, json, shim, writeDraft,
   type Attachment, type Bubble, type PendingSend, type SecurityCode, type Thread,
 } from "./bridge";
-import type { Poller } from "./poller";
+/** What a surface asks of the poller. The main window passes the Poller
+ *  itself; the tray popout passes a follower that forwards to it (one
+ *  poller, several surfaces, as in BarWidget.qml). */
+export interface Control {
+  markThreadRead(chat: string, seen: string): void;
+  markAllRead(): void;
+  refresh(deep: boolean): void;
+}
 // The same helper modules the QML imports, so both front ends agree.
 import { markSendFailed } from "../../../SendState.mjs";
 import { quotedDraft } from "../../../MessageActions.mjs";
@@ -169,7 +176,7 @@ export class View {
   private sendBtn = h("button", "send", "Send");
   private noteEl = h("div", "note");
 
-  constructor(private poller: Poller) {
+  constructor(private poller: Control, private compact = false) {
     this.build();
   }
 
@@ -203,6 +210,14 @@ export class View {
     this.side.append(this.headerEl, this.statusEl, this.codeEl, this.searchEl, this.pinnedEl, this.listEl);
 
     const head = h("div", "conv-head");
+    if (this.compact) {
+      // The popout is one column, like Panel.qml: the list, or a conversation with a way back.
+      const back = h("button", "icon-btn back", "←");
+      back.title = "Back (Esc)";
+      back.onclick = () => this.backToList();
+      head.append(back);
+      this.root.classList.add("compact");
+    }
     head.append(this.titleEl, this.metaEl);
     const bar = h("div", "compose");
     const attach = h("button", "icon-btn", "📎");
@@ -408,6 +423,7 @@ export class View {
     if (this.active) this.drafts.set(this.active.chat, this.composer.value);
     this.active = t;
     this.peeking = peek;
+    this.root.classList.add("in-thread");
     this.bubbles = [];
     this.bubblesJson = "";
     this.loading = true;
@@ -423,6 +439,27 @@ export class View {
     this.noteEl.textContent = "";
     this.renderConv();
     this.requestThreadLoad(t.chat);
+  }
+
+  /** Compact mode: leave the conversation for the list. The thread stops
+   *  counting as read, as in Panel.qml's back button. */
+  backToList() {
+    if (this.active) this.drafts.set(this.active.chat, this.composer.value);
+    this.active = null;
+    this.bubbles = [];
+    this.bubblesJson = "";
+    this.rendered = false;
+    this.root.classList.remove("in-thread");
+    this.renderConv();
+    this.renderList();
+    this.focusList();
+  }
+
+  /** The popout opening: always the list, freshly polled (Panel.qml:65-68). */
+  resetToList() {
+    this.startMode("list");
+    if (this.active) this.backToList();
+    this.poller.refresh(true);
   }
 
   private commitPeek() {
@@ -714,7 +751,8 @@ export class View {
       this.send();
     } else if (e.key === "Escape") {
       e.preventDefault();
-      this.focusList();
+      if (this.compact) this.backToList();
+      else this.focusList();
     } else if (e.key === "ArrowLeft" && this.composer.selectionStart === 0 && this.composer.selectionEnd === 0) {
       e.preventDefault();
       this.focusList();
@@ -985,6 +1023,7 @@ export class View {
     this.pinnedEl.querySelector(".is-active")?.scrollIntoView({ block: "nearest" });
     // Split view: the cursor resting on a row shows that thread without reading it.
     clearTimeout(this.peekTimer);
+    if (this.compact) return; // peeking is a split-view idea
     this.peekTimer = window.setTimeout(() => {
       const t = this.threads[this.cursor];
       if (t && this.active?.chat !== t.chat) this.showThread(t, true);
@@ -1003,6 +1042,7 @@ export class View {
     if (inComposer || inSearch || e.ctrlKey || e.altKey || e.metaKey) return;
     if (e.key === "Escape") {
       if (this.mode !== "list") { this.startMode("list"); return; }
+      if (this.compact && this.active) { this.backToList(); return; }
       void getCurrentWindow().hide();
       return;
     }
