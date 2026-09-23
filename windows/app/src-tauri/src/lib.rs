@@ -292,6 +292,31 @@ fn toggle_main(app: &AppHandle) {
     }
 }
 
+/// A Windows toast. Clicking it opens that conversation ("" just shows the
+/// window), which the notification plugin cannot do on desktop. The title and
+/// body are already allowlist-gated and capped by the UI; a security code's
+/// toast never carries the digits.
+#[tauri::command]
+fn toast(app: AppHandle, title: String, body: String, chat: String) -> Result<(), String> {
+    use tauri_winrt_notification::Toast;
+    // An installed build is registered under its identifier (the Start menu
+    // shortcut carries it); a dev build borrows PowerShell's, as Tauri does.
+    let id = if cfg!(debug_assertions) { Toast::POWERSHELL_APP_ID.to_string() } else { app.config().identifier.clone() };
+    let handle = app.clone();
+    Toast::new(&id)
+        .title(&title)
+        .text1(&body)
+        .on_activated(move |_| {
+            show_main(handle.clone());
+            if !chat.is_empty() {
+                let _ = handle.emit("blip://open-chat", chat.clone());
+            }
+            Ok(())
+        })
+        .show()
+        .map_err(|e| e.to_string())
+}
+
 /// A pasted image (screenshot) as a draft file for send-file.ts. Lands in
 /// Blip's runtime dir (the core's $XDG_RUNTIME_DIR), is named by us, never by
 /// the page, and old drafts are swept after a day.
@@ -357,7 +382,7 @@ pub fn run_app() {
         .plugin(tauri_plugin_autostart::Builder::new().arg(HIDDEN_ARG).build())
         .manage(Tray(Mutex::new(None)))
         .manage(Watching(AtomicBool::new(false)))
-        .invoke_handler(tauri::generate_handler![core, shim, start_watch, set_status, show_main, write_draft, setup_state, run_setup])
+        .invoke_handler(tauri::generate_handler![core, shim, start_watch, set_status, show_main, write_draft, setup_state, run_setup, toast])
         .setup(|app| {
             if let Ok(dir) = app.path().resource_dir() {
                 let _ = RESOURCES.set(dir);

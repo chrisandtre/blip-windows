@@ -37,20 +37,28 @@ view = new View(poller);
 // ---- notifications. The collector already applied the allowlist, the
 // mute list and the "not while you're reading it" gate; the body is capped
 // the way BarWidget caps it (220 chars).
+// Toasts go through the shell's own `toast` command so a click can open the
+// conversation; the plugin is the fallback (and mock mode's path).
 let allowed: boolean | null = null;
-async function notify(title: string, body: string) {
+async function notify(title: string, body: string, chat = "") {
+  const text = body.length > 220 ? body.slice(0, 217) + "…" : body;
+  try {
+    await invoke("toast", { title, body: text, chat });
+    return;
+  } catch { /* fall back to the plugin */ }
   if (allowed === null) {
     allowed = await isPermissionGranted();
     if (!allowed) allowed = (await requestPermission()) === "granted";
   }
-  if (allowed) sendNotification({ title, body: body.length > 220 ? body.slice(0, 217) + "…" : body });
+  if (allowed) sendNotification({ title, body: text });
 }
 
 async function toast(list: Toast[]) {
-  for (const t of list.slice(-20)) await notify(t.name || t.chat || "iMessage", t.text || "");
+  for (const t of list.slice(-20)) await notify(t.name || t.chat || "iMessage", t.text || "", t.chat || "");
 }
 
 void listen("blip://mark-all-read", () => poller.markAllRead());
+void listen<string>("blip://open-chat", (e) => view.goto(e.payload));
 
 // Default global shortcut to raise Blip. Win+ combinations are reserved by
 // the shell on Windows, so this is Ctrl+Alt+M.
