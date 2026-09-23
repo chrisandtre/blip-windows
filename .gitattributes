@@ -1,0 +1,6 @@
+# Keep LF everywhere, including Windows clones: tests read source text,
+# and bridge/ scripts run on the Mac and Linux.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.cmd text eol=crlf
