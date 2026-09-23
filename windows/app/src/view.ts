@@ -113,6 +113,15 @@ function initials(name: string): string {
 
 const displayName = (t: Thread) => t.pin_name || t.name || t.handle || t.chat;
 const avatarKey = (t: Thread) => (isGroupId(t.chat) ? t.chat : t.handle || t.chat);
+/** The six classic tapbacks, in Messages' order; kind is imsg-tapback's name. */
+const REACTIONS = [
+  { kind: "love", emoji: "❤️", label: "Heart" },
+  { kind: "like", emoji: "👍", label: "Thumbs up" },
+  { kind: "dislike", emoji: "👎", label: "Thumbs down" },
+  { kind: "laugh", emoji: "😂", label: "Ha ha" },
+  { kind: "emphasize", emoji: "‼️", label: "Exclamation" },
+  { kind: "question", emoji: "❓", label: "Question" },
+] as const;
 const openableMime = (m: string) => /^(image|video|audio)\//.test(m) || ["application/pdf", "text/plain", "text/vcard", "text/calendar"].includes(m);
 
 // ------------------------------------------------------------------ view
@@ -186,6 +195,8 @@ export class View {
   private sendBtn = h("button", "send", "Send");
   private noteEl = h("div", "note");
   private addContactBtn = h("button", "head-action", "Add contact");
+  /** tapbacks=on in bridge.conf (tray: Reactions (beta)). Off by default. */
+  tapbacksOn = false;
 
   constructor(private poller: Control, private compact = false) {
     this.build();
@@ -592,6 +603,33 @@ export class View {
   }
 
   // ---------------------------------------------------------- rendering
+  // ---------------------------------------------------------- reactions (tapbacks)
+  private canReact(b: Bubble): boolean {
+    return this.tapbacksOn && this.online && !!b.guid && !b.pending && !b.retracted && !!this.active;
+  }
+
+  /** Add or remove one tapback through imsg-tapback on the Mac. It drives
+   *  Messages through Accessibility and confirms the row in chat.db, so a
+   *  reply here is the truth; a failure is shown once, never retried. */
+  private reacting = false;
+  private async react(b: Bubble, kind: string, remove: boolean) {
+    const t = this.active;
+    if (!t || !b.guid || this.reacting) return;
+    this.reacting = true;
+    const label = REACTIONS.find((r) => r.kind === kind)?.label || kind;
+    this.noteEl.textContent = `${remove ? "Removing" : "Sending"} ${label}… (Messages on the Mac comes forward for a moment)`;
+    const args = ["--chat", t.chat, "--guid", b.guid, "--kind", kind, ...(remove ? ["--remove"] : [])];
+    const out = await shim("imsg-tapback", args, undefined, 90_000).catch((e) => ({ code: -1, stdout: "", stderr: String(e) }));
+    this.reacting = false;
+    if (out.code === 0) {
+      this.noteEl.textContent = "";
+      if (this.active?.chat === t.chat) this.requestThreadLoad(t.chat);
+    } else {
+      const why = out.stderr.trim().split(/\r?\n/).filter(Boolean).pop() || `exit ${out.code}`;
+      this.noteEl.textContent = out.code === 69 ? "Reaction not sent - Mac unreachable" : `Reaction not sent: ${why.replace(/^imsg-tapback: /, "")}`;
+    }
+  }
+
   // ---------------------------------------------------------- add a contact (ContactSave.qml)
   /** A DM that shows a bare number or email has no contact behind it yet. */
   private unknownSender(t: Thread | null): boolean {
@@ -760,6 +798,8 @@ export class View {
       const bub = h("div", "bubble");
       bub.append(linked(b.text));
       bub.oncontextmenu = (e) => { e.preventDefault(); this.bubbleMenu(b, e); };
+      // Double-click reacts, as in Messages.
+      bub.ondblclick = (e) => { if (this.canReact(b)) { e.preventDefault(); window.getSelection()?.removeAllRanges(); this.bubbleMenu(b, e); } };
       wrap.append(bub);
     }
     if (b.tapbacks?.length) wrap.append(h("div", "tapbacks", b.tapbacks.map((x) => x.emoji).join("")));
@@ -797,6 +837,17 @@ export class View {
     document.querySelector(".menu")?.remove();
     const m = h("div", "menu");
     const item = (label: string, fn: () => void) => { const i = h("button", "", label); i.onclick = () => { m.remove(); fn(); }; m.append(i); };
+    if (this.canReact(b)) {
+      const row = h("div", "react-row");
+      for (const r of REACTIONS) {
+        const mine = (b.tapbacks || []).some((t) => t.from_me && t.emoji === r.emoji);
+        const btn = h("button", "react" + (mine ? " mine" : ""), r.emoji);
+        btn.title = mine ? `Remove ${r.label}` : r.label;
+        btn.onclick = () => { m.remove(); void this.react(b, r.kind, mine); };
+        row.append(btn);
+      }
+      m.append(row);
+    }
     if (this.online && isSendable(this.active)) item("Quote and reply", () => { this.composer.value = quotedDraft(b, this.composer.value); this.composer.focus(); this.composerInput(); });
     item("Copy message", () => void navigator.clipboard.writeText(b.text));
     const url = b.link?.url || firstUrl(b.text);

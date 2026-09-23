@@ -69,6 +69,8 @@ async function leader() {
   });
 
   const s = await setupState();
+  view.tapbacksOn = s.tapbacks;
+  void listen<boolean>("blip://tapbacks", (e) => { view.tapbacksOn = e.payload; });
   if (!s.configured) await setupScreen();
   void invoke("start_watch");
   void poller.start();
@@ -104,6 +106,8 @@ function follower() {
     refresh: (deep) => void emitTo("main", "blip://refresh", { deep }),
   };
   const view = new View(control, true);
+  void setupState().then((s) => { view.tapbacksOn = s.tapbacks; });
+  void listen<boolean>("blip://tapbacks", (e) => { view.tapbacksOn = e.payload; });
   void listen<Thread[]>("blip://threads", (e) => view.setThreads(e.payload));
   void listen<Status>("blip://status", (e) => view.setStatus(e.payload));
   void listen<string>("blip://panel-shown", () => view.resetToList());

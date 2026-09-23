@@ -1,0 +1,361 @@
+#!/usr/bin/env python3
+"""imsg-tapback — add or remove a tapback (reaction) on one message.
+
+    imsg-tapback --chat <id> --guid <message guid> --kind <kind> [--remove]
+    imsg-tapback --probe --guid <message guid>
+
+    kind: love | like | dislike | laugh | emphasize | question
+
+Blip long said outbound tapbacks needed SIP off. That was true of injection;
+it is not true of Accessibility, the same grant `imsg-read` already uses
+(issue #69). Messages exposes each classic tapback as an accessibility action
+on the message balloon ("Heart", "Thumbs up", …). The approach follows
+Beeper's platform-imessage (MIT): open `imessage://open?message-guid=<guid>`,
+which makes Messages scroll to and select that exact message, take the
+selected cell in the transcript, and perform the action named for the
+tapback. No text matching, no keystrokes, no private API.
+
+Rules this keeps (Fred, #69):
+  * Opt-in on the client (`tapbacks=on` in bridge.conf); the Mac tool itself
+    changes nothing unless asked for one exact message.
+  * Fail quietly and visibly: if the balloon or the action is not there, say
+    which, once, and exit non-zero. Never retry blind, never try a
+    neighbouring action.
+  * chat.db is the referee: success means a new row of ours pointing at that
+    guid with the requested type (2000+k to add, 3000+k to remove).
+
+Action names are localized strings, read at run time from ChatKit's
+accessibility bundle; English is the fallback. `--probe` prints the action
+NAMES available on the selected balloon (never message text) so a macOS
+update that renames them can be diagnosed.
+
+Exit: 0 done (or already in the requested state); 64 bad arguments; 69 Messages
+could not start; 75 not confirmed (see stderr); 77 Accessibility not granted.
+"""
+import glob
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import sqlite3
+import subprocess
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+# kind -> (tapback index k, English action title, Sequoia+ picker identifier).
+KINDS = {
+    "love": (0, "Heart", "heart"),
+    "like": (1, "Thumbs up", "thumbsUp"),
+    "dislike": (2, "Thumbs down", "thumbsDown"),
+    "laugh": (3, "Ha ha!", "ha"),
+    "emphasize": (4, "Exclamation mark", "exclamation"),
+    "question": (5, "Question mark", "questionMark"),
+}
+PICKER_TITLES = ("Tapback", "React")   # the action that opens the picker, by macOS version
+GUID_RE = re.compile(r"[A-Za-z0-9-]{8,64}")   # message guids; "_" refused, as Beeper does
+AXBUNDLE = "/System/iOSSupport/System/Library/AccessibilityBundles/ChatKitFramework.axbundle"
+
+
+def load(name, path):
+    loader = importlib.machinery.SourceFileLoader(name, path)
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+# imsg-read owns the Messages UI lock, Accessibility checks, focus hand-back
+# and conversation clusters; reuse them rather than keep second copies.
+READ = load("blip_imsg_read_for_tapback", os.path.join(HERE, "imsg-read"))
+
+
+def die(code, msg):
+    sys.stderr.write(f"imsg-tapback: {msg}\n")
+    sys.exit(code)
+
+
+# ---------------------------------------------------------------- chat.db
+
+def db():
+    con = sqlite3.connect(f"file:{READ.DB_PATH}?mode=ro", uri=True, timeout=5)
+    con.row_factory = sqlite3.Row
+    return con
+
+
+def target_row(con, guid):
+    return con.execute(
+        """SELECT m.ROWID, c.chat_identifier AS chat
+             FROM message m
+             LEFT JOIN chat_message_join j ON j.message_id = m.ROWID
+             LEFT JOIN chat c ON c.ROWID = j.chat_id
+            WHERE m.guid = ?""", (guid,)).fetchall()
+
+
+def my_state(con, guid):
+    """(latest type of OUR tapback on this message or None, max ROWID now).
+    One classic tapback per sender: the newest row wins, as enrich() nets it."""
+    row = con.execute(
+        """SELECT associated_message_type AS t FROM message
+            WHERE is_from_me = 1 AND associated_message_type BETWEEN 2000 AND 3999
+              AND (associated_message_guid = ? OR associated_message_guid LIKE ?)
+            ORDER BY date DESC LIMIT 1""", ("bp:" + guid, "%/" + guid)).fetchone()
+    top = con.execute("SELECT max(ROWID) FROM message").fetchone()[0] or 0
+    return (row["t"] if row else None), top
+
+
+def confirmed(guid, want_type, after_rowid, wait=6.0):
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        time.sleep(0.4)
+        try:
+            con = db()
+            try:
+                hit = con.execute(
+                    """SELECT 1 FROM message
+                        WHERE ROWID > ? AND is_from_me = 1 AND associated_message_type = ?
+                          AND (associated_message_guid = ? OR associated_message_guid LIKE ?)""",
+                    (after_rowid, want_type, "bp:" + guid, "%/" + guid)).fetchone()
+            finally:
+                con.close()
+            if hit:
+                return True
+        except sqlite3.Error:
+            pass
+    return False
+
+
+# ---------------------------------------------------------------- localized titles
+
+def localized_titles():
+    """English title -> this Mac's title, from ChatKit's accessibility strings.
+    Keys are matched through the English table, so no key names are assumed.
+    Any failure leaves English, which is right on an English Mac."""
+    out = {}
+    try:
+        langs = subprocess.run(["defaults", "read", "-g", "AppleLanguages"], capture_output=True,
+                               text=True, timeout=5).stdout
+        lang = (re.findall(r'"?([A-Za-z]{2,3}(?:[-_][A-Za-z]{2,4})?)"?', langs) or ["en"])[0]
+        tables = {}
+        for path in glob.glob(os.path.join(AXBUNDLE, "**", "Accessibility.*"), recursive=True):
+            if not path.endswith((".strings", ".loctable")):
+                continue
+            r = subprocess.run(["plutil", "-convert", "json", "-o", "-", path], capture_output=True,
+                               text=True, timeout=5)
+            if r.returncode != 0:
+                continue
+            data = json.loads(r.stdout)
+            if path.endswith(".loctable"):       # {lang: {key: value}}
+                tables.update({k: v for k, v in data.items() if isinstance(v, dict)})
+            else:                                # <lang>.lproj/Accessibility.strings
+                tables[os.path.basename(os.path.dirname(path)).split(".")[0]] = data
+        en = tables.get("en") or tables.get("English") or {}
+        local = (tables.get(lang) or tables.get(lang.replace("-", "_")) or tables.get(lang.split("-")[0].split("_")[0]) or {})
+        for title in [k[1] for k in KINDS.values()] + list(PICKER_TITLES):
+            key = next((k for k, v in en.items() if v == title), None)
+            if key and isinstance(local.get(key), str):
+                out[title] = local[key]
+    except Exception:
+        pass
+    return out
+
+
+# ---------------------------------------------------------------- the UI
+
+JXA = r"""
+function run(argv) {
+  var mode = argv[0], titles = JSON.parse(argv[1]), pickerId = argv[2], wantSelected = argv[3] === "1";
+  var se = Application("System Events");
+  var p = se.processes.byName("Messages");
+  function attr(el, name) { try { return el.attributes.byName(name).value(); } catch (e) { return null; } }
+  function kids(el) { try { return el.uiElements(); } catch (e) { return []; } }
+  function names(el) { try { return el.actions().map(function (a) { return a.name(); }); } catch (e) { return []; } }
+  function find(root, id, budget) {
+    var queue = [root], seen = 0;
+    while (queue.length && seen < budget) {
+      var el = queue.shift(); seen++;
+      if (attr(el, "AXIdentifier") === id) return el;
+      var k = kids(el); for (var i = 0; i < k.length; i++) queue.push(k[i]);
+    }
+    return null;
+  }
+  function actionOn(el, title) {
+    var acts; try { acts = el.actions(); } catch (e) { return null; }
+    for (var i = 0; i < acts.length; i++) {
+      var n = acts[i].name();
+      if (n === "Name:" + title || n.indexOf("Name:" + title + "\n") === 0) return acts[i];
+    }
+    return null;
+  }
+  var wins = p.windows();
+  if (!wins.length) return JSON.stringify({ ok: false, why: "Messages has no window open" });
+  var transcript = null;
+  for (var w = 0; w < wins.length && !transcript; w++) {
+    var t = find(wins[w], "TranscriptCollectionView", 600);
+    if (t && attr(t, "AXDescription") !== "Reply transcript") transcript = t;
+    else if (t && !transcript) transcript = t;
+  }
+  if (!transcript) return JSON.stringify({ ok: false, why: "the conversation transcript was not found" });
+  // The deep link selects the message: the container whose first child is AXSelected.
+  var cells = kids(transcript), cell = null;
+  for (var c = cells.length - 1; c >= 0 && !cell; c--) {
+    var first = kids(cells[c])[0];
+    if (first && attr(first, "AXSelected") === true) cell = first;
+  }
+  if (!cell) return JSON.stringify({ ok: false, why: "the message is not selected on screen (it may not be rendered)" });
+  // Actions sit on the cell or on its first child, depending on the build.
+  var targets = [cell].concat(kids(cell).slice(0, 1));
+  if (mode === "probe") {
+    return JSON.stringify({ ok: true, probe: targets.map(function (e) {
+      return names(e).map(function (n) { return n.split("\n")[0]; });
+    }) });
+  }
+  for (var i = 0; i < targets.length; i++) {
+    var a = actionOn(targets[i], titles.direct);
+    if (a) { a.perform(); return JSON.stringify({ ok: true, via: "action" }); }
+  }
+  // No direct action on this build: open the picker and press its button.
+  var opener = null;
+  for (var i = 0; i < targets.length && !opener; i++)
+    for (var j = 0; j < titles.picker.length && !opener; j++) opener = actionOn(targets[i], titles.picker[j]);
+  if (!opener) return JSON.stringify({ ok: false, why: "no \"" + titles.direct + "\" or Tapback action on the balloon (macOS may have renamed it; run --probe)" });
+  opener.perform();
+  delay(0.75);
+  var picker = null;
+  for (var w = 0; w < wins.length && !picker; w++) picker = find(wins[w], "TapbackPickerCollectionView", 800);
+  if (!picker) return JSON.stringify({ ok: false, why: "the tapback picker did not open" });
+  var btn = find(picker, pickerId, 200);
+  if (!btn) return JSON.stringify({ ok: false, why: "the picker has no " + pickerId + " button" });
+  if (attr(btn, "AXSelected") === wantSelected) return JSON.stringify({ ok: true, via: "already" });
+  try { btn.actions.byName("AXPress").perform(); } catch (e) { btn.click(); }
+  return JSON.stringify({ ok: true, via: "picker" });
+}
+"""
+
+
+def jxa(mode, titles, picker_id, want_selected):
+    try:
+        r = subprocess.run(["osascript", "-l", "JavaScript", "-e", JXA, mode, json.dumps(titles), picker_id,
+                            "1" if want_selected else "0"], capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "why": "System Events timed out"}
+    try:
+        return json.loads((r.stdout or "").strip().splitlines()[-1])
+    except Exception:
+        return {"ok": False, "why": (r.stderr or r.stdout or "osascript failed").strip().splitlines()[-1]}
+
+
+def select_message(guid):
+    """Deep-link to the exact message; Messages scrolls to it and selects it.
+    `open -g` keeps Messages from taking the foreground where it can."""
+    url = "imessage://open?message-guid=" + guid
+    try:
+        r = subprocess.run(["open", "-g", url], capture_output=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        return "opening the message timed out"
+    if r.returncode != 0:
+        return f"could not open the message (open exited {r.returncode})"
+    time.sleep(1.2)
+    return ""
+
+
+# ---------------------------------------------------------------- main
+
+def main():
+    argv = sys.argv[1:]
+    if not argv or argv[0] in ("-h", "--help"):
+        print(__doc__.strip())
+        sys.exit(0)
+    opts, i = {"remove": False, "probe": False}, 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ("--remove", "--probe"):
+            opts[a[2:]] = True
+        elif a in ("--chat", "--guid", "--kind") and i + 1 < len(argv):
+            opts[a[2:]] = argv[i + 1]
+            i += 1
+        else:
+            die(64, f"unknown argument {a!r}")
+        i += 1
+    guid = opts.get("guid", "")
+    if not GUID_RE.fullmatch(guid):
+        die(64, "--guid must be a message guid")
+    kind = opts.get("kind", "love")
+    if kind not in KINDS:
+        die(64, f"--kind must be one of {', '.join(KINDS)}")
+    k, english, picker_id = KINDS[kind]
+
+    why = READ.ensure_messages()
+    if why:
+        die(69, why)
+    why = READ.accessibility()
+    if why:
+        die(77, why)
+
+    con = db()
+    try:
+        rows = target_row(con, guid)
+        if not rows:
+            die(64, "no such message on this Mac")
+        if not opts["probe"]:
+            chat = opts.get("chat", "")
+            if not chat:
+                die(64, "--chat is required")
+            cluster = set(READ.cluster_ids(con, chat))
+            if not any(r["chat"] in cluster for r in rows):
+                die(64, "that message is not in that conversation")
+        current, top = my_state(con, guid)
+    finally:
+        con.close()
+
+    add_type, remove_type = 2000 + k, 3000 + k
+    if not opts["probe"]:
+        if not opts["remove"] and current == add_type:
+            print("already reacted")
+            return
+        if opts["remove"] and current != add_type:
+            print("nothing to remove")
+            return
+
+    names = localized_titles()
+    titles = {"direct": names.get(english, english),
+              "picker": [names.get(t, t) for t in PICKER_TITLES] + [t for t in PICKER_TITLES if names.get(t, t) != t]}
+
+    prev = READ.frontmost()
+    try:
+        why = select_message(guid)
+        if why:
+            die(75, why)
+        res = jxa("probe" if opts["probe"] else "act", titles, picker_id, not opts["remove"])
+        if res.get("ok") is False and "not selected" in res.get("why", ""):
+            # Messages may need to be the active app to select from a link;
+            # one activation, the way imsg-read wakes a dormant menu.
+            READ.osa('tell application "Messages" to activate')
+            time.sleep(0.8)
+            select_message(guid)
+            res = jxa("probe" if opts["probe"] else "act", titles, picker_id, not opts["remove"])
+    finally:
+        READ.restore_front(prev)
+
+    if opts["probe"]:
+        print(json.dumps({"titles": titles, **res}, ensure_ascii=False))
+        return
+    if not res.get("ok"):
+        die(75, res.get("why", "the tapback could not be performed"))
+    if res.get("via") == "already":
+        print("already in that state")
+        return
+    if confirmed(guid, remove_type if opts["remove"] else add_type, top):
+        print("removed" if opts["remove"] else "reacted")
+        return
+    die(75, "Messages did not record the tapback (nothing new in chat.db); not retrying")
+
+
+if __name__ == "__main__":
+    try:
+        with READ.messages_ui_lock():
+            main()
+    except (OSError, TimeoutError) as exc:
+        die(75, str(exc))

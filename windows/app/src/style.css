@@ -184,3 +184,8 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 
 /* a message reached from search */
 .msg.flash .bubble, .msg.flash .att-img, .msg.flash .chip { box-shadow: 0 0 0 3px var(--blue); transition: box-shadow .6s; }
+
+/* ---- reactions */
+.react-row { display: flex; gap: 2px; padding: 2px 2px 6px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.menu .react { font-size: 20px; padding: 4px 6px; border-radius: 50%; text-align: center; }
+.menu .react.mine { background: var(--blue); }
