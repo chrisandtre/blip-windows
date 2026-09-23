@@ -18,13 +18,16 @@ use std::time::Duration;
 
 use serde::Serialize;
 use tauri::image::Image;
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
+use tauri_plugin_autostart::ManagerExt as _;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+/// Passed by the login item: start in the tray, window hidden.
+const HIDDEN_ARG: &str = "--hidden";
 
 /// The core scripts the UI may run. Mirrors what the QML spawns; anything
 /// else is refused before a process starts.
@@ -343,6 +346,15 @@ pub fn run_app() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // Size and position survive a restart (BlipWindow's window.json).
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                // Not visibility: quitting from the tray must not mean "start hidden".
+                .with_state_flags(tauri_plugin_window_state::StateFlags::all() & !tauri_plugin_window_state::StateFlags::VISIBLE)
+                .build(),
+        )
+        // Off until chosen in the tray menu; a login start goes straight to the tray.
+        .plugin(tauri_plugin_autostart::Builder::new().arg(HIDDEN_ARG).build())
         .manage(Tray(Mutex::new(None)))
         .manage(Watching(AtomicBool::new(false)))
         .invoke_handler(tauri::generate_handler![core, shim, start_watch, set_status, show_main, write_draft, setup_state, run_setup])
@@ -351,17 +363,31 @@ pub fn run_app() {
                 let _ = RESOURCES.set(dir);
             }
             sync_bin();
+            if std::env::args().any(|a| a == HIDDEN_ARG) {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.hide();
+                }
+            }
             let open = MenuItem::with_id(app, "open", "Open Blip", true, None::<&str>)?;
             let read = MenuItem::with_id(app, "mark-all-read", "Mark all as read", true, None::<&str>)?;
+            let login_on = app.autolaunch().is_enabled().unwrap_or(false);
+            let login = CheckMenuItem::with_id(app, "autostart", "Start Blip at login", true, login_on, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit Blip", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open, &read, &PredefinedMenuItem::separator(app)?, &quit])?;
+            let menu = Menu::with_items(app, &[&open, &read, &PredefinedMenuItem::separator(app)?, &login, &PredefinedMenuItem::separator(app)?, &quit])?;
+            let login_item = login.clone();
             let tray = TrayIconBuilder::with_id("blip")
                 .icon(Image::from_bytes(include_bytes!("../icons/tray.png"))?)
                 .tooltip("Blip")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
-                .on_menu_event(|app, e| match e.id.as_ref() {
+                .on_menu_event(move |app, e| match e.id.as_ref() {
                     "open" => show_main(app.clone()),
+                    "autostart" => {
+                        let al = app.autolaunch();
+                        let want = !al.is_enabled().unwrap_or(false);
+                        let _ = if want { al.enable() } else { al.disable() };
+                        let _ = login_item.set_checked(al.is_enabled().unwrap_or(false));
+                    }
                     "mark-all-read" => {
                         let _ = app.emit("blip://mark-all-read", ());
                     }
