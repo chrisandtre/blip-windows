@@ -85,7 +85,11 @@ fn open_pipe() -> Option<std::fs::File> {
     if !name.starts_with(r"\\.\pipe\blip-mux-") {
         return None;
     }
-    OpenOptions::new().read(true).write(true).open(PathBuf::from(name)).ok()
+    use std::os::windows::fs::OpenOptionsExt;
+    // SECURITY_IDENTIFICATION: whatever serves this pipe may learn who we are
+    // but not act as us (only relevant if the name were ever squatted).
+    const SECURITY_IDENTIFICATION: u32 = 1 << 16;
+    OpenOptions::new().read(true).write(true).security_qos_flags(SECURITY_IDENTIFICATION).open(PathBuf::from(name)).ok()
 }
 
 fn connect() -> std::fs::File {

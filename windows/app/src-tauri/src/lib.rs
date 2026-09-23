@@ -29,11 +29,11 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// Passed by the login item: start in the tray, window hidden.
 const HIDDEN_ARG: &str = "--hidden";
 
-/// The core scripts the UI may run. Mirrors what the QML spawns; anything
-/// else is refused before a process starts.
+/// The core scripts the UI runs, and only those: anything else is refused
+/// before a process starts. (contact-vcard, which writes files to a chosen
+/// folder, and the other contact-review scripts join when the UI uses them.)
 const CORE_SCRIPTS: &[&str] = &[
-    "collector", "thread", "send-file", "fetch", "avatar", "search", "linkpreview",
-    "contact-search", "contact-review", "contact-details", "contact-save", "contact-vcard", "spellcheck",
+    "collector", "thread", "send-file", "fetch", "avatar", "search", "linkpreview", "contact-search", "contact-save",
 ];
 
 #[derive(Serialize)]
@@ -69,17 +69,19 @@ fn resource(name: &str) -> Option<PathBuf> {
 /// How to start a core script. An installed build ships `blip-core.exe`
 /// (the core compiled with Bun); a dev build runs the repo's .ts files with
 /// the bun on PATH.
-fn core_command(script: &str) -> Command {
-    // Debug builds always run the live .ts files, never a stale bundled core.
-    if let Some(core) = resource("blip-core.exe").filter(|_| !cfg!(debug_assertions)) {
-        let mut c = Command::new(core);
-        c.arg(script);
-        return c;
+fn core_command(script: &str) -> Result<Command, String> {
+    if cfg!(debug_assertions) {
+        // Debug builds always run the live .ts files, never a stale bundled core.
+        let repo = repo_dir();
+        let mut c = Command::new("bun");
+        c.arg(repo.join(format!("{script}.ts"))).current_dir(repo);
+        return Ok(c);
     }
-    let repo = repo_dir();
-    let mut c = Command::new("bun");
-    c.arg(repo.join(format!("{script}.ts"))).current_dir(repo);
-    c
+    // A release never falls back to bun on PATH or a path from the build machine.
+    let core = resource("blip-core.exe").ok_or("blip-core.exe is missing - reinstall Blip")?;
+    let mut c = Command::new(core);
+    c.arg(script);
+    Ok(c)
 }
 
 /// Keep %LOCALAPPDATA%\Blip\bin (the core's ~/bin) matching the installed
@@ -141,9 +143,15 @@ async fn run_setup(host: String) -> Result<i32, String> {
     if !ok {
         return Err("expected [user@]host".into());
     }
-    let script = resource("setup/blip-setup.ps1").unwrap_or_else(|| repo_dir().join("windows").join("scripts").join("blip-setup.ps1"));
+    let script = match resource("setup/blip-setup.ps1") {
+        Some(p) => p,
+        None if cfg!(debug_assertions) => repo_dir().join("windows").join("scripts").join("blip-setup.ps1"),
+        None => return Err("the setup script is missing - reinstall Blip".into()),
+    };
     const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
-    let status = Command::new("powershell.exe")
+    // By full path: a bare name would search the app folder first.
+    let system = std::env::var_os("SystemRoot").map(PathBuf::from).filter(|p| p.is_absolute()).ok_or("SystemRoot is not set")?;
+    let status = Command::new(system.join("System32").join("WindowsPowerShell").join("v1.0").join("powershell.exe"))
         .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
         .arg(script)
         .arg(&host)
@@ -202,7 +210,7 @@ async fn core(script: String, args: Vec<String>, stdin: Option<String>, timeout_
     if !CORE_SCRIPTS.contains(&script.as_str()) {
         return Err(format!("'{script}' is not a Blip core script"));
     }
-    let mut c = core_command(&script);
+    let mut c = core_command(&script)?;
     c.args(&args);
     run(c, stdin, Duration::from_millis(timeout_ms.unwrap_or(60_000))).await
 }
@@ -397,7 +405,19 @@ pub fn run_app() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // Ctrl+Alt+M raises Blip (Win+ combinations belong to the shell).
+        // Registered here, not by the page, so the page needs no shortcut rights.
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_shortcut("ctrl+alt+m")
+                .expect("valid shortcut")
+                .with_handler(|app, _shortcut, event| {
+                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        show_main(app.clone());
+                    }
+                })
+                .build(),
+        )
         // Size and position survive a restart (BlipWindow's window.json).
         .plugin(
             tauri_plugin_window_state::Builder::default()

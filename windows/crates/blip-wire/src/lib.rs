@@ -46,7 +46,20 @@ pub const MAX_STDIN: u64 = 64 * 1024 * 1024;
 /// The mux's pipe name, lock and log live here too. Not roaming: the key and
 /// known_hosts it depends on are per machine.
 pub fn local_dir() -> PathBuf {
-    PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("Blip")
+    profile_dir("LOCALAPPDATA").join("Blip")
+}
+
+/// An absolute profile folder from the environment, or a hard stop. An empty
+/// or relative value must never turn into a path under the current directory,
+/// which could then supply known_hosts or bridge.conf.
+pub fn profile_dir(var: &str) -> PathBuf {
+    match std::env::var_os(var).map(PathBuf::from) {
+        Some(p) if p.is_absolute() => p,
+        _ => {
+            eprintln!("blip: %{var}% is not set to an absolute path; refusing to guess");
+            std::process::exit(EXIT_CONFIG);
+        }
+    }
 }
 
 /// ~/.config/blip under Blip's Windows home — where the core looks for bridge.conf.

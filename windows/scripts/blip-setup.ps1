@@ -161,7 +161,9 @@ if ($enrolled -and -not $UpdateMac) {
 
     Write-Host ''
     Info "Connecting to $MacHost to install the bridge and enroll this PC's key."
-    Info 'If this is the first connection, check the host fingerprint and type yes.'
+    Info 'If this is the first connection, check the fingerprint before typing yes. On the Mac:'
+    Info '  ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub'
+    Info 'The two must match. A Tailscale name is harder to impersonate than a LAN name.'
     Info 'If the Mac asks for a password, it is your Mac login password (asked once).'
     Write-Host ''
     # Start-Process feeds the tar to ssh's stdin as raw bytes; a PowerShell

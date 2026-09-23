@@ -6,7 +6,7 @@ let nextId = 1;
 const callbacks = new Map<number, (x: unknown) => void>();
 
 async function bridge(cmd: string, args: Args) {
-  const r = await fetch("http://localhost:1421/", { method: "POST", body: JSON.stringify({ cmd, args }) });
+  const r = await fetch("http://127.0.0.1:1421/", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cmd, args }) });
   return r.json();
 }
 
@@ -21,7 +21,7 @@ async function bridge(cmd: string, args: Args) {
     callbacks.delete(id);
   },
   convertFileSrc(path: string) {
-    return "http://localhost:1421/file?p=" + encodeURIComponent(path);
+    return "http://127.0.0.1:1421/file?p=" + encodeURIComponent(path);
   },
   async invoke(cmd: string, args: Args = {}) {
     if (cmd === "core" || cmd === "shim" || cmd === "setup_state") return bridge(cmd, args);

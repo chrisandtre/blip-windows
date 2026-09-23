@@ -37,7 +37,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { currentUid } from "./platform";
+import { currentUid, markFromInternet } from "./platform";
 
 const HOME = process.env.HOME ?? homedir();
 export const CACHE_DIR = join(process.env.XDG_CACHE_HOME ?? join(HOME, ".cache"), "blip", "att");
@@ -414,6 +414,7 @@ export function fetchAttachment(
     closeSync(fd);
   }
   renameSync(tmp, file);
+  markFromInternet(file);
   evict(cacheFileName(id, name, mime, preview));
   return {
     ok: true, online: true, path: file, url: pathToFileURL(file).href, error: "",

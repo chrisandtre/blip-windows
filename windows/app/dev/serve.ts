@@ -32,12 +32,20 @@ async function fakeSend(what: string, stdin: string | null) {
   return fail ? { code: 1, stdout: "", stderr: "simulated failure" } : { code: 0, stdout: what === "send-file" ? JSON.stringify({ ok: true, online: true, error: "" }) : "", stderr: "" };
 }
 
+// This bridge serves real messages, so only this machine's mock page may use
+// it: loopback only, the page's Origin, and a JSON content type (which forces
+// a browser preflight, so another site cannot even fire a request blind).
+const ORIGIN = "http://localhost:1420";
 Bun.serve({
+  hostname: "127.0.0.1",
   port: 1421,
   async fetch(req) {
-    const cors = { "Access-Control-Allow-Origin": "http://localhost:1420", "Access-Control-Allow-Headers": "content-type" };
+    const cors = { "Access-Control-Allow-Origin": ORIGIN, "Access-Control-Allow-Headers": "content-type" };
     if (req.method === "OPTIONS") return new Response(null, { headers: cors });
     const url = new URL(req.url);
+    const img = req.method === "GET" && url.pathname === "/file";
+    if (!img && (req.headers.get("origin") !== ORIGIN || !String(req.headers.get("content-type")).startsWith("application/json")))
+      return new Response("no", { status: 403 });
     if (url.pathname === "/file") {
       // Cached images for the page (what the asset protocol serves in the app):
       // only files under Blip's cache.
@@ -51,6 +59,13 @@ Bun.serve({
     if (cmd === "core") {
       const script = String(args.script);
       if (script === "send-file") body = await fakeSend("send-file", (args.stdin as string) ?? null);
+      // contact-save: prepare/preview never leave this machine; save is faked.
+      else if (script === "contact-save" && (args.args as string[])[0] === "save") {
+        await Bun.sleep(800);
+        console.log("[mock] FAKE contact save (nothing written on the Mac)");
+        const d = JSON.parse(String(args.stdin || "{}"));
+        body = { code: 0, stdout: JSON.stringify({ ok: true, name: [d.firstName, d.lastName].filter(Boolean).join(" ") }), stderr: "" };
+      } else if (script === "contact-save") body = await run(["bun", "contact-save.ts", ...(args.args as string[])], (args.stdin as string) ?? null);
       else if (!SCRIPTS.has(script)) body = { code: 64, stdout: "", stderr: `mock: '${script}' not allowed` };
       else body = await run(["bun", `${script}.ts`, ...(args.args as string[])], (args.stdin as string) ?? null);
     } else if (cmd === "shim") {

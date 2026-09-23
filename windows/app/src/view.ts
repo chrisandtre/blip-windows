@@ -64,6 +64,14 @@ function firstUrl(text: string): string {
   return u.startsWith("www.") ? "https://" + u : u;
 }
 
+/** The host a card shows, like thread.ts linkHost. Never `new URL()`: a
+ *  sender-crafted card URL it rejects would throw mid-render and leave the
+ *  conversation unreadable. */
+function linkHost(url: string): string {
+  const m = /^https?:\/\/([^/?#]+)/i.exec(url || "");
+  return (m ? m[1]! : url || "").replace(/^www\./, "").toLowerCase();
+}
+
 function openLink(url: string) {
   if (/^https?:\/\//i.test(url)) void openUrl(url);
 }
@@ -175,6 +183,7 @@ export class View {
   private composer = h("textarea", "composer");
   private sendBtn = h("button", "send", "Send");
   private noteEl = h("div", "note");
+  private addContactBtn = h("button", "head-action", "Add contact");
 
   constructor(private poller: Control, private compact = false) {
     this.build();
@@ -218,7 +227,9 @@ export class View {
       head.append(back);
       this.root.classList.add("compact");
     }
-    head.append(this.titleEl, this.metaEl);
+    this.addContactBtn.title = "Add this sender to Contacts on the Mac";
+    this.addContactBtn.onclick = () => this.active && void this.addContact(this.active);
+    head.append(this.titleEl, this.metaEl, this.addContactBtn);
     const bar = h("div", "compose");
     const attach = h("button", "icon-btn", "📎");
     attach.title = "Attach files";
@@ -564,8 +575,82 @@ export class View {
   }
 
   // ---------------------------------------------------------- rendering
+  // ---------------------------------------------------------- add a contact (ContactSave.qml)
+  /** A DM that shows a bare number or email has no contact behind it yet. */
+  private unknownSender(t: Thread | null): boolean {
+    if (!t || isGroupId(t.chat)) return false;
+    const n = (t.name || "").trim();
+    return !n || n === t.handle || /^[+\d]/.test(n) || n.includes("@");
+  }
+
+  /** prepare -> preview -> save, through contact-save.ts. Fields stay in
+   *  memory and cross stdin; a save whose result cannot be verified says so
+   *  and offers no retry, since a lost response can follow a real save. */
+  private async addContact(t: Thread) {
+    document.querySelector(".modal")?.remove();
+    const handle = t.handle || t.chat;
+    const call = async (mode: string, value: unknown) =>
+      json<{ ok: boolean; error?: string; uncertain?: boolean; name?: string; draft?: { firstName: string; lastName: string; phone: string; email: string } }>(
+        await core("contact-save", [mode], JSON.stringify(value), mode === "save" ? 330_000 : 15_000));
+    const prep = await call("prepare", { handle });
+    if (!prep?.ok || !prep.draft) { this.noteEl.textContent = prep?.error || "Could not start a contact"; return; }
+
+    const modal = h("div", "modal");
+    const card = h("div", "modal-card");
+    const field = (label: string, value: string) => {
+      const l = h("label", "", label);
+      const i = h("input");
+      i.value = value;
+      i.spellcheck = false;
+      l.append(i);
+      card.append(l);
+      return i;
+    };
+    card.append(h("h2", "", "New contact"), h("p", "modal-sub", handle));
+    const first = field("First name", "");
+    const last = field("Last name", "");
+    const phone = field("Phone", prep.draft.phone);
+    const email = field("Email", prep.draft.email);
+    const msg = h("p", "modal-msg");
+    const row = h("div", "modal-row");
+    const cancel = h("button", "btn", "Cancel");
+    const save = h("button", "btn primary", "Save to Contacts");
+    row.append(cancel, save);
+    card.append(msg, row);
+    modal.append(card);
+    document.body.append(modal);
+    first.focus();
+    const close = () => modal.remove();
+    cancel.onclick = close;
+    modal.onkeydown = (e) => { if (e.key === "Escape" && !save.disabled) { e.stopPropagation(); close(); } };
+    save.onclick = async () => {
+      const draft = { handle, firstName: first.value, lastName: last.value, phone: phone.value, email: email.value };
+      save.disabled = cancel.disabled = true;
+      msg.className = "modal-msg";
+      msg.textContent = "Checking…";
+      const pre = await call("preview", draft);
+      if (!pre?.ok) { msg.textContent = pre?.error || "Check the fields"; save.disabled = cancel.disabled = false; return; }
+      msg.textContent = `Saving ${pre.name} on the Mac…`;
+      const res = await call("save", { ...draft, confirmed: true });
+      cancel.disabled = false;
+      if (res?.ok) {
+        msg.textContent = `Saved ${res.name}.`;
+        cancel.textContent = "Done";
+        this.avatars.delete(handle);
+        this.avatarWanted.delete(handle);
+        this.poller.refresh(true);
+      } else {
+        msg.className = "modal-msg urgent";
+        msg.textContent = res?.error || "Save could not be verified. Check Contacts on the Mac before trying again.";
+        // Only a definite refusal may be retried; an unverified save may have happened.
+        save.disabled = !res || res.uncertain !== false;
+      }
+    };
+  }
+
   private renderHead() {
     const t = this.active;
+    this.addContactBtn.hidden = !this.unknownSender(t) || !this.online;
     this.titleEl.textContent = t ? displayName(t) : "";
     const meta = !t ? "" : isGroupId(t.chat)
       ? (isSendable(t) ? "group" : "group · read-only (id unknown)") + (t.participants?.length ? ` · ${t.participants.length} people` : "")
@@ -616,7 +701,7 @@ export class View {
     if (shownCard) {
       const c = h("div", "card");
       if (shownCard.image) { const img = h("img"); img.src = fileSrc(shownCard.image); c.append(img); }
-      c.append(h("div", "card-title", shownCard.title || shownCard.url), h("div", "card-url", new URL(shownCard.url.startsWith("http") ? shownCard.url : "https://" + shownCard.url).host));
+      c.append(h("div", "card-title", shownCard.title || shownCard.url), h("div", "card-url", linkHost(shownCard.url)));
       c.onclick = () => openLink(shownCard.url);
       wrap.append(c);
     }

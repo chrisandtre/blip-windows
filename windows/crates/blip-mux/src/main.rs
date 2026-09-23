@@ -95,7 +95,7 @@ fn parse_conf(text: &str) -> Result<Conf, String> {
     c.host = host;
     c.port = 22;
     c.key = if key.is_empty() {
-        PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_default()).join(".ssh").join("blip_win_ed25519")
+        wire::profile_dir("USERPROFILE").join(".ssh").join("blip_win_ed25519")
     } else {
         PathBuf::from(key)
     };
@@ -109,7 +109,7 @@ fn load_conf() -> Result<Conf, String> {
 }
 
 fn known_hosts() -> PathBuf {
-    PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_default()).join(".ssh").join("known_hosts")
+    wire::profile_dir("USERPROFILE").join(".ssh").join("known_hosts")
 }
 
 // ------------------------------------------------------------------ log

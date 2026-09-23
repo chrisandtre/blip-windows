@@ -9,7 +9,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { emit, emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { register } from "@tauri-apps/plugin-global-shortcut";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import type { Thread, Toast } from "./bridge";
 import { Poller } from "./poller";
@@ -67,11 +66,6 @@ async function leader() {
     void emitTo("panel", "blip://threads", poller.threads);
     void emitTo("panel", "blip://status", last);
   });
-
-  // Win+ combinations are reserved by the shell on Windows, so Ctrl+Alt+M.
-  void register("Ctrl+Alt+M", (e) => {
-    if (e.state === "Pressed") void invoke("show_main");
-  }).catch(() => { /* taken by another app: the tray still works */ });
 
   const s = await setupState();
   if (!s.configured) await setupScreen();

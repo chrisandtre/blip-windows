@@ -9,7 +9,7 @@
 // refuses links (O_NOFOLLOW's job), and the protection is where the files
 // live: Blip's Windows home (%LOCALAPPDATA%\Blip) inherits a profile ACL that
 // admits only the user, SYSTEM and Administrators.
-import { closeSync, lstatSync } from "node:fs";
+import { closeSync, lstatSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 export const IS_WINDOWS = process.platform === "win32";
@@ -55,4 +55,13 @@ export function currentUid(): number {
 /** No group/other permission bits. Always true on Windows (see above). */
 export function isPrivateMode(mode: number): boolean {
   return IS_WINDOWS || (mode & 0o077) === 0;
+}
+
+/** Windows: tag a file that came from someone else's message as downloaded
+ *  from the internet (the Zone.Identifier stream a browser writes), so
+ *  Office, Acrobat and Edge open it in Protected View. No-op elsewhere; a
+ *  filesystem without streams (FAT) just keeps the file untagged. */
+export function markFromInternet(path: string): void {
+  if (!IS_WINDOWS) return;
+  try { writeFileSync(`${path}:Zone.Identifier`, "[ZoneTransfer]\r\nZoneId=3\r\n"); } catch { /* no ADS here */ }
 }

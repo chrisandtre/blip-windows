@@ -20,8 +20,9 @@ export function setupScreen(): Promise<void> {
         Apple ID, stay awake, and have <b>Remote Login</b> on (System Settings &rarr; General &rarr; Sharing).</p>
         <label>Mac address <input id="setup-host" placeholder="you@your-mac" spellcheck="false"></label>
         <p class="setup-hint">Your Mac login name and its name on the network, or its Tailscale name.
-        A console window opens next; it may ask you to confirm the Mac's fingerprint and type its
-        password once. Then be at the Mac to click <b>Allow</b> when it asks.</p>
+        A console window opens next. Before typing <b>yes</b> to the Mac's fingerprint, compare it with
+        <code>ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code> run on the Mac. Then type the
+        Mac's password once, and be at the Mac to click <b>Allow</b> when it asks.</p>
         <button id="setup-go">Set up</button>
         <p id="setup-msg" class="setup-msg"></p>
       </div>`;

@@ -4,9 +4,12 @@ build-release.ps1 - build the Blip for Windows installer.
   windows\scripts\build-release.ps1
 
 Needs Rust (MSVC), Bun, and the VS C++ build tools. Output:
-  windows\target\release\bundle\nsis\Blip_<version>_x64-setup.exe
+  windows\target\release\bundle\nsis\Blip for Windows_<version>_x64-setup.exe
 #>
 $ErrorActionPreference = 'Stop'
+# Mock mode (fake sends, a local HTTP bridge) is compiled in only when this is
+# set; a release must never carry it.
+if ($env:VITE_BLIP_MOCK) { throw 'VITE_BLIP_MOCK is set: refusing to build a release with mock mode' }
 $win = Resolve-Path (Join-Path $PSScriptRoot '..')
 $repo = Resolve-Path (Join-Path $win '..')
 
