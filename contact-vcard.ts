@@ -9,6 +9,7 @@ import {pathToFileURL} from 'node:url';
 import {homedir} from 'node:os';
 import {shimPath} from './shim-path';
 import {normalizeHandle,identityKey,readStdinBounded} from './contact-review';
+import {pinFd,fdPath,currentUid,isPrivateMode,IS_WINDOWS} from './platform';
 import {shimPath} from './shim-path';
 const MAX_CARD_BYTES=2*1024*1024, MAX_RESPONSE_BYTES=3*1024*1024;
 const TOKEN=/^sha256:[0-9a-f]{64}$/;
@@ -26,9 +27,9 @@ export function vcardBytes(body:any,handle:string,token:string): Buffer {
   return bytes;
 }
 function directory(path:string): number {
-  const fd=openSync(path,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
+  const fd=pinFd(openSync(path,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW|constants.O_NONBLOCK),path);
   const st=fstatSync(fd);
-  if (!st.isDirectory() || st.uid!==process.getuid!() || (st.mode&0o077)!==0) {
+  if (!st.isDirectory() || st.uid!==currentUid() || !isPrivateMode(st.mode)) {
     closeSync(fd); throw new Error('Unsafe vCard runtime directory');
   }
   return fd;
@@ -46,11 +47,11 @@ function entries(path:string,maximum:number):string[] {
 function removeCopy(root:string,name:string) {
   const child=directory(join(root,name));
   try {
-    const pinned=`/proc/self/fd/${child}`;
+    const pinned=fdPath(child);
     for(const file of entries(pinned,1)) {
       const st=lstatSync(join(pinned,file));
       if(!file.endsWith('.vcf') || vcardFileName(file.slice(0,-4))!==file
-        || !st.isFile() || st.uid!==process.getuid!()) throw new Error('Unexpected file in the vCard cache');
+        || !st.isFile() || st.uid!==currentUid()) throw new Error('Unexpected file in the vCard cache');
       unlinkSync(join(pinned,file));
     }
     rmdirSync(join(root,name));
@@ -62,14 +63,14 @@ export function writeVcard(bytes:Buffer,runtimeRoot:string,shortName:unknown='Co
   let parent=directory(runtimeRoot);
   try {
     for(const component of ['blip','vcards']) {
-      const pinned=`/proc/self/fd/${parent}/${component}`;
+      const pinned=fdPath(parent,component);
       try {mkdirSync(pinned,{mode:0o700});} catch(e:any) {if(e.code!=='EEXIST') throw e;}
       const child=directory(pinned); closeSync(parent); parent=child;
     }
-    const root=`/proc/self/fd/${parent}`;
+    const root=fdPath(parent);
     const copies=entries(root,256).filter(name=>FILE.test(name) || COPY.test(name))
       .map(name=>({name,stat:lstatSync(join(root,name))}))
-      .filter(file=>(FILE.test(file.name) ? file.stat.isFile() : file.stat.isDirectory()) && file.stat.uid===process.getuid!())
+      .filter(file=>(FILE.test(file.name) ? file.stat.isFile() : file.stat.isDirectory()) && file.stat.uid===currentUid())
       .sort((a,b)=>b.stat.mtimeMs-a.stat.mtimeMs);
     for(const [index,file] of copies.entries()) {
       if(index>=31 || Date.now()-file.stat.mtimeMs>24*60*60*1000) {
@@ -81,7 +82,7 @@ export function writeVcard(bytes:Buffer,runtimeRoot:string,shortName:unknown='Co
     mkdirSync(join(root,copy),{mode:0o700});
     const child=directory(join(root,copy)),name=vcardFileName(shortName);
     try {
-      const fd=openSync(`/proc/self/fd/${child}/${name}`,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);
+      const fd=openSync(fdPath(child,name),constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);
       try {let written=0;while(written<bytes.length) written+=writeSync(fd,bytes,written,bytes.length-written);} finally {closeSync(fd);}
     } finally {closeSync(child);}
     return pathToFileURL(join(runtimeRoot,'blip','vcards',copy,name)).href;
@@ -147,15 +148,16 @@ export function saveVcardInFolder(bytes:Buffer,folder:string,name:unknown):strin
     throw new Error('Invalid destination folder');
   if(!bytes.length || bytes.length>MAX_CARD_BYTES) throw new Error('Contact vCard is too large');
   const resolved=realpathSync(folder),flags=constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW|constants.O_NONBLOCK;
-  let parent=openSync('/',flags);
+  // Windows has no /proc walk to pin each component; realpath already resolved links.
+  let parent=IS_WINDOWS ? pinFd(openSync(resolved,flags),resolved) : openSync('/',flags);
   let staging='';
   try {
-    for(const component of resolved.split('/').filter(Boolean)) {
+    for(const component of IS_WINDOWS ? [] : resolved.split('/').filter(Boolean)) {
       const child=openSync(`/proc/self/fd/${parent}/${component}`,flags);
       closeSync(parent);parent=child;
     }
-    if(fstatSync(parent).uid!==process.getuid!()) throw new Error('Choose a folder you own');
-    const root=`/proc/self/fd/${parent}`;
+    if(fstatSync(parent).uid!==currentUid()) throw new Error('Choose a folder you own');
+    const root=fdPath(parent);
     const temporary=join(root,'.blip-vcard-'+randomBytes(16).toString('hex'));
     const fd=openSync(temporary,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);
     staging=temporary;

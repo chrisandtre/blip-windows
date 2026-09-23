@@ -16,7 +16,8 @@ test('size storage round-trips dimensions and rejects oversized files and symlin
  try {
   expect(sizeStore(dir,['500','600'])).toEqual({width:500,height:600});
   expect(sizeStore(dir,[])).toEqual({width:500,height:600});
-  expect(statSync(join(dir,'panel.json')).mode & 0o777).toBe(0o600);
+  if (process.platform!=='win32') // no POSIX modes on Windows (platform.ts)
+    expect(statSync(join(dir,'panel.json')).mode & 0o777).toBe(0o600);
   writeFileSync(join(dir,'panel.json'),' '.repeat(257));
   expect(sizeStore(dir,[])).toBeNull();
   rmSync(join(dir,'panel.json'));

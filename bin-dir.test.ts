@@ -51,3 +51,13 @@ test("no spawner hard-codes ~/bin", () => {
       .toEqual({ f, hit: false });
   }
 });
+
+test("a Windows home accepts drive-absolute bin_dir and still refuses the rest", () => {
+  const W = String.raw`C:\Users\A B\AppData\Local\Blip`;
+  expect(parseBinDir("", W)).toBe(W + "/bin");
+  expect(parseBinDir("bin_dir=~/.local/bin", W)).toBe(W + "/.local/bin");
+  expect(parseBinDir(String.raw`bin_dir=D:\tools\blip\ `, W)).toBe(String.raw`D:\tools\blip`);
+  expect(parseBinDir(String.raw`bin_dir=C:\Users\CHRIS_~1\bin`, W)).toBe(String.raw`C:\Users\CHRIS_~1\bin`);
+  for (const v of [String.raw`relative\bin`, String.raw`C:\a\..\b`, String.raw`C:\a;calc`, String.raw`\\server\share`])
+    expect(parseBinDir(`bin_dir=${v}`, W)).toBe(W + "/bin");
+});

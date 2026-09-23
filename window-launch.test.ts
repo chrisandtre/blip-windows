@@ -47,7 +47,8 @@ esac
   }
 }
 
-describe("Blip window launch identity", () => {
+// Hyprland focus script, run through sh: Linux-only by design.
+describe.skipIf(process.platform === "win32")("Blip window launch identity", () => {
   for (const title of ["Blip", "Blip (3)"]) {
     test(`shortcut focuses ${title}, not an earlier title match`, () => {
       expect(run(["sh", "-c", shortcut], title, false)).toEqual([

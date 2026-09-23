@@ -37,6 +37,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { currentUid } from "./platform";
 
 const HOME = process.env.HOME ?? homedir();
 export const CACHE_DIR = join(process.env.XDG_CACHE_HOME ?? join(HOME, ".cache"), "blip", "att");
@@ -209,7 +210,7 @@ function cachedImageMetrics(path: string, mime: string): ImageMetrics {
   try {
     fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const st = fstatSync(fd);
-    if (!st.isFile() || st.uid !== process.getuid() || st.size <= 0) return { ...EMPTY_IMAGE_METRICS };
+    if (!st.isFile() || st.uid !== currentUid() || st.size <= 0) return { ...EMPTY_IMAGE_METRICS };
     const header = Buffer.alloc(Math.min(st.size, IMAGE_HEADER_BYTES));
     const count = readSync(fd, header, 0, header.length, 0);
     return imageMetrics(header.subarray(0, count), mime);

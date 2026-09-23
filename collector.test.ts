@@ -714,7 +714,8 @@ describe("state and allowlist I/O", () => {
       pins: { A: 0 },
       toasted: [opaque],
     });
-    expect(statSync(p).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") // no POSIX modes on Windows (platform.ts)
+      expect(statSync(p).mode & 0o777).toBe(0o600);
   });
 
   test("a missing state file yields a safe empty watermark", () => {
@@ -2020,7 +2021,8 @@ describe("the read-push policy is reported, not just applied", () => {
 // The dedicated key is confined to blip-dispatch AND, over Tailscale, pinned to
 // the enrolling machine's addresses: a leaked private key is useless from
 // anywhere else. blip_key_from() runs for real (PATH without tailscale).
-describe("blip-setup: the key's from= pin", () => {
+// scripts/blip-setup is bash; Windows has windows/scripts/blip-setup.ps1 + mac-enroll.sh.
+describe.skipIf(process.platform === "win32")("blip-setup: the key's from= pin", () => {
   const setup = new URL("./scripts/blip-setup", import.meta.url).pathname;
   const keyFrom = (seen: string) => spawnSync("bash",
     ["-c", 'source <(sed -n "/^blip_key_from()/,/^}/p" "$1"); blip_key_from "$2"', "_", setup, seen],

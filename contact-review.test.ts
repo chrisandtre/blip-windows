@@ -259,12 +259,15 @@ describe("cache and streaming boundary", () => {
   test("cache is private, bounded and rejects links and FIFOs", () => {
     writeAuditCache(entry, cachePath);
     expect(readAuditCache(cachePath)).toEqual(entry);
+    // Modes, O_NOFOLLOW and FIFOs are POSIX; Windows relies on the profile ACL (platform.ts).
+    if (process.platform !== "win32") {
     expect(lstatSync(cachePath).mode & 0o777).toBe(0o600);
     const link = join(scratch, "link"); symlinkSync(cachePath, link);
     expect(() => readAuditCache(link)).toThrow();
     const fifo = join(scratch, "fifo");
     expect(Bun.spawnSync(["mkfifo", fifo]).exitCode).toBe(0);
     expect(readAuditCache(fifo)).toBeNull();
+    }
     const valid = readFileSync(cachePath);
     writeFileSync(cachePath, Buffer.concat([valid, Buffer.alloc(MAX_AUDIT_CACHE_BYTES - valid.length, 32)]));
     expect(readAuditCache(cachePath)).toEqual(entry);

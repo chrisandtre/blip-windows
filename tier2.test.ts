@@ -218,7 +218,8 @@ describe("clipboard file paste", () => {
       .toBe("x-special/gnome-copied-files");
   });
 
-  test("extracts an existing local file from both supported payloads", () => {
+  // wl-paste payloads: Linux-only by design (the Windows app reads its own clipboard).
+  test.skipIf(process.platform === "win32")("extracts an existing local file from both supported payloads", () => {
     const tmp = `${process.env.XDG_CACHE_HOME}/blip-paste-${process.pid}.vcf`;
     writeFileSync(tmp, "BEGIN:VCARD\nEND:VCARD\n");
     const uri = new URL(`file://${tmp}`).href;
@@ -233,7 +234,7 @@ describe("clipboard file paste", () => {
     expect(localFileFromPayload("text/uri-list", "file:///definitely/missing/person.vcf\n")).toBe("");
   });
 
-  test("snapshot returns a file attachment before attempting text", () => {
+  test.skipIf(process.platform === "win32")("snapshot returns a file attachment before attempting text", () => {
     const tmp = `${process.env.XDG_CACHE_HOME}/blip-snapshot-${process.pid}.vcf`;
     writeFileSync(tmp, "BEGIN:VCARD\nEND:VCARD\n");
     const calls: string[][] = [];
@@ -536,7 +537,7 @@ describe("paste type picking", () => {
     expect(firstFileUri("copy\nfile:///tmp/a%20b.png")).toBe("/tmp/a b.png");
     expect(firstFileUri("https://example.com/x.png")).toBe("");
   });
-  test("a copied file path attaches instead of pasting as text", () => {
+  test.skipIf(process.platform === "win32")("a copied file path attaches instead of pasting as text", () => {
     const dir = mkdtempSync(join(tmpdir(), "blip-paste-"));
     const file = join(dir, "shot.png");
     writeFileSync(file, "x");

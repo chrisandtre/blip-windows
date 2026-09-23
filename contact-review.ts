@@ -8,6 +8,7 @@ import { closeSync, constants, fchmodSync, fstatSync, fsyncSync, mkdirSync,
   openSync, readSync, renameSync, unlinkSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { currentUid as platformUid, fdPath, isPrivateMode, pinFd } from "./platform";
 type Runner = typeof spawnSync;
 export const MAX_IDENTITY_REQUEST_BYTES = 48 * 1024;
 export const MAX_IDENTITY_OUTPUT_BYTES = 48 * 1024;
@@ -95,7 +96,7 @@ function normalizeContactToken(value: unknown): string {
 }
 
 function currentUid(): number {
-  const uid = typeof process.getuid === "function" ? process.getuid() : -1;
+  const uid = platformUid();
   if (uid < 0) throw new Error("cannot determine the current user");
   return uid;
 }
@@ -115,12 +116,12 @@ function openPinnedDirectory(path: string, create: boolean): number {
     closeSync(fd);
     throw new Error("identity directory is not owned by the current user");
   }
-  if ((info.mode & 0o077) !== 0) fchmodSync(fd, 0o700);
-  return fd;
+  if (!isPrivateMode(info.mode)) fchmodSync(fd, 0o700);
+  return pinFd(fd, path);
 }
 
 function pinnedPath(directoryFd: number, name: string): string {
-  return `/proc/self/fd/${directoryFd}/${name}`;
+  return fdPath(directoryFd, name);
 }
 
 function finiteInteger(value: unknown, label: string, low: number, high: number): number {

@@ -1,0 +1,39 @@
+name: windows
+on:
+  pull_request:
+  push:
+    branches: [main, windows-client]
+jobs:
+  core:
+    # The shared TypeScript core must stay green on BOTH platforms: the
+    # Windows changes (platform.ts, bin-dir.ts) promise Linux is unchanged.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun test
+  rust:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: windows
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: windows
+      - run: cargo test --release
+      - run: cargo build --release
+      - name: PowerShell setup script parses on 5.1
+        shell: powershell
+        run: |
+          $e = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile("$PWD\scripts\blip-setup.ps1", [ref]$null, [ref]$e)
+          if ($e) { $e | ForEach-Object { $_.Message }; exit 1 }

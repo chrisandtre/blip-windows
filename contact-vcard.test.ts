@@ -29,8 +29,10 @@ test('copies a runtime file through clipboard stdin and reports failure honestly
     const uri=calls[1].input.trim(),path=fileURLToPath(uri);
     expect(readFileSync(path)).toEqual(card);
     expect(basename(path)).toBe('Ex.vcf');
+    if (process.platform!=='win32') { // no POSIX modes on Windows (platform.ts)
     expect(statSync(dirname(path)).mode&0o777).toBe(0o700);
     expect(statSync(path).mode&0o777).toBe(0o600);
+    }
     expect(()=>copyContactVcard({handle,token},((command:string)=>({status:command.endsWith('/contacts')?0:1,stdout:JSON.stringify(body)})) as any,dir)).toThrow('clipboard');
   } finally {rmSync(dir,{recursive:true,force:true});}
 });
@@ -52,7 +54,8 @@ test('saves a named private vCard without replacing existing files or links',()=
     const first=saveVcardInFolder(card,dir,'Example Person');
     expect(first).toBe(join(dir,'Example Person.vcf'));
     expect(readFileSync(first)).toEqual(card);
-    expect(statSync(first).mode&0o777).toBe(0o600);
+    if (process.platform!=='win32') // no POSIX modes on Windows (platform.ts)
+      expect(statSync(first).mode&0o777).toBe(0o600);
     symlinkSync(first,join(dir,'Example Person (2).vcf'));
     const next=saveVcardInFolder(Buffer.from('different synthetic bytes'),dir,'Example Person');
     expect(next).toBe(join(dir,'Example Person (3).vcf'));
