@@ -283,8 +283,11 @@ export class View {
       const t = list.find((x) => x.chat === this.active!.chat);
       if (t) {
         this.active = t;
-        if (t.last_ts !== this.activeLastTs && this.threadRunning !== t.chat && this.threadQueued !== t.chat) {
-          if (!this.stick) this.pushPending = true;
+        // A load already running may have started before this message landed,
+        // so queue another rather than skip it (a skipped one left a sent
+        // message's "Sending..." bubble up with nothing left to resolve it).
+        if (t.last_ts !== this.activeLastTs && this.threadQueued !== t.chat) {
+          if (!this.stick && !this.hasPending(t.chat)) this.pushPending = true;
           else this.requestThreadLoad(t.chat);
         }
         this.activeLastTs = t.last_ts;
@@ -443,7 +446,8 @@ export class View {
    *  scrolls back to the bottom (:1332-1339). */
   pushReload() {
     if (!this.active || !this.surfaceOpen()) return;
-    if (!this.stick) { this.pushPending = true; return; }
+    // Sends in flight need the reload that resolves them, scrolled up or not.
+    if (!this.stick && !this.hasPending(this.active.chat)) { this.pushPending = true; return; }
     if (this.threadRunning && this.threadQueued) return;
     this.requestThreadLoad(this.active.chat);
   }
@@ -470,7 +474,21 @@ export class View {
     if (this.threadQueued) void this.nextThreadLoad();
   }
 
-  private reloadTries = 0;
+  private hasPending(chat: string) {
+    return this.pendingSends.some((p) => p.chat === chat && !p.failed);
+  }
+
+  /** While a send is unresolved, look again every 1.5 s. thread.ts resolves
+   *  it against its real row, or drops it after 2 minutes, so this always
+   *  ends; the old cap of 8 tries could stop before a slow Mac wrote the row. */
+  private pendingTimer: number | undefined;
+  private schedulePendingReload(chat: string) {
+    clearTimeout(this.pendingTimer);
+    this.pendingTimer = window.setTimeout(() => {
+      if (this.active?.chat === chat && this.hasPending(chat)) this.requestThreadLoad(chat);
+    }, 1500);
+  }
+
   private threadResult(chat: string, code: number, d: { ok: boolean; error: string; bubbles: Bubble[]; pending?: PendingSend[] } | null) {
     this.loading = false;
     if (!d) {
@@ -490,11 +508,7 @@ export class View {
     for (const b of list) if (!b.pending && !b.scheduled && b.ts > seen) seen = b.ts;
     if (d.pending) {
       this.pendingSends = this.pendingSends.filter((p) => p.chat !== chat).concat(d.pending);
-      // Sends still in flight: look again shortly, up to 8 times (:1629-1639).
-      if (d.pending.some((p) => !p.failed) && this.reloadTries < 8) {
-        this.reloadTries++;
-        window.setTimeout(() => this.active?.chat === chat && this.requestThreadLoad(chat), 600);
-      }
+      if (this.hasPending(chat)) this.schedulePendingReload(chat);
     }
     const j = JSON.stringify(list);
     this.rendered = true;
@@ -526,6 +540,10 @@ export class View {
     this.renderHead();
     const t = this.active;
     this.main.classList.toggle("is-empty", !t);
+    // Emptying the scroller clamps it to the top; a reload while reading
+    // older messages must leave the reader where they were.
+    const keep = this.scroller.scrollTop;
+    if (!pinBottom) requestAnimationFrame(() => { this.scroller.scrollTop = keep; });
     this.scroller.textContent = "";
     if (!t) {
       this.scroller.append(h("div", "empty", "Pick a conversation"));
@@ -755,7 +773,6 @@ export class View {
     const job = this.sendQueue.shift();
     if (!job) return;
     this.sending = true;
-    this.reloadTries = 0;
     const out = await shim("imsg-send", [...job.target, "--yes", "--text-stdin", "--keep-dashes"], job.text, 60_000)
       .catch((e) => ({ code: -1, stdout: "", stderr: String(e) }));
     this.sending = false;

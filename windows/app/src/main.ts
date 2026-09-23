@@ -7,6 +7,10 @@ import { Poller } from "./poller";
 import { View } from "./view";
 import "./style.css";
 
+// Mock mode (windows/app/dev/serve.ts): a plain browser with real reads and
+// fake sends. The condition is a build-time constant, so a release drops it.
+if (import.meta.env.VITE_BLIP_MOCK && !("__TAURI_INTERNALS__" in window)) await import("../dev/mock-tauri");
+
 let view!: View;
 const poller = new Poller(
   {
