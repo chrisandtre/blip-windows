@@ -252,10 +252,15 @@ impl Link {
             match self.try_addr(&c, &key, addr, Duration::from_secs(2)).await {
                 Ok(h) => return Ok(h),
                 Err(e) => {
-                    if e.to_string().contains("HOST KEY MISMATCH") || e.to_string().contains("refused the Blip key") {
+                    // Only a changed host key stops here. A refused key does
+                    // not: the same Mac can be reached by two routes (LAN and
+                    // Tailscale) and a key pinned with from= is accepted on one
+                    // only, so the fresh lookup below may still get in.
+                    if e.to_string().contains("HOST KEY MISMATCH") {
                         log(format!("connect failed: {e}"));
                         return Err(e);
                     }
+                    log(format!("remembered address {addr} failed ({e}); looking the name up"));
                     last_err = e;
                 }
             }
