@@ -223,6 +223,12 @@ impl Link {
             let hash = h.best_supported_rsa_hash().await?.flatten();
             let auth = h.authenticate_publickey(c.user.clone(), PrivateKeyWithHashAlg::new(key.clone(), hash)).await?;
             if !auth.success() {
+                // Setup pins the key to this PC's Tailscale addresses when it
+                // enrolled over Tailscale, so the same key is refused over
+                // the LAN whenever Tailscale is off here.
+                if !is_tailscale(addr) {
+                    bail!("the Mac refused the Blip key over the local network - if Tailscale is off or logged out on this PC, turn it back on; otherwise re-run blip-setup");
+                }
                 bail!("the Mac refused the Blip key - re-run blip-setup");
             }
             Ok::<_, anyhow::Error>(h)
@@ -596,5 +602,32 @@ mod tests {
         let send: Vec<String> = ["imsg-send", "--to", "x"].iter().map(|s| s.to_string()).collect();
         assert_eq!(remote_command(&send, &c), "imsg-send '--to' 'x'");
         assert_eq!(remote_command(&["ping".to_string()], &c), "ping");
+    }
+}
+
+/// 100.64.0.0/10 (Tailscale's IPv4 range) or fd7a:115c:a1e0::/48.
+fn is_tailscale(addr: SocketAddr) -> bool {
+    match addr {
+        SocketAddr::V4(v) => {
+            let o = v.ip().octets();
+            o[0] == 100 && (64..=127).contains(&o[1])
+        }
+        SocketAddr::V6(v) => {
+            let g = v.ip().segments();
+            g[0] == 0xfd7a && g[1] == 0x115c && g[2] == 0xa1e0
+        }
+    }
+}
+
+#[cfg(test)]
+mod tailscale_tests {
+    use super::is_tailscale;
+
+    #[test]
+    fn ranges() {
+        assert!(is_tailscale("100.85.192.43:22".parse().unwrap()));
+        assert!(is_tailscale("[fd7a:115c:a1e0::2535:734f]:22".parse().unwrap()));
+        assert!(!is_tailscale("192.168.1.109:22".parse().unwrap()));
+        assert!(!is_tailscale("100.128.0.1:22".parse().unwrap()));
     }
 }
