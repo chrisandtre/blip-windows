@@ -72,7 +72,8 @@
       "../../../bridge/mac/blip-check": "setup/bridge/mac/blip-check",
       "../../../bridge/mac/blip-dispatch": "setup/bridge/mac/blip-dispatch",
       "../../../bridge/mac/calling_codes.py": "setup/bridge/mac/calling_codes.py",
-      "../../../bridge/mac/install.sh": "setup/bridge/mac/install.sh"
+      "../../../bridge/mac/install.sh": "setup/bridge/mac/install.sh",
+      "../../../bridge/mac/imsg-tapback": "setup/bridge/mac/imsg-tapback"
     },
     "windows": {
       "nsis": {

@@ -1,0 +1,633 @@
+#!/usr/bin/env python3
+"""imsg-tapback — add or remove a tapback (reaction) on one message.
+
+    imsg-tapback --chat <id> --guid <message guid> --kind <kind> [--remove]
+    imsg-tapback --probe --guid <message guid>
+    imsg-tapback --engine
+
+    kind: love | like | dislike | laugh | emphasize | question
+
+Blip long said outbound tapbacks needed SIP off. That was true of injection;
+it is not true of Accessibility, the same grant `imsg-read` already uses
+(issue #69). Messages exposes each classic tapback as an accessibility action
+on the message balloon ("Heart", "Thumbs up", …). The approach follows
+Beeper's platform-imessage (MIT): open `imessage://open?message-guid=<guid>`,
+which makes Messages scroll to and select that exact message, take the
+selected cell in the transcript, and perform the action named for the
+tapback. No text matching, no keystrokes, no private API.
+
+Rules this keeps (Fred, #69):
+  * Opt-in on the client (`tapbacks=on` in bridge.conf); the Mac tool itself
+    changes nothing unless asked for one exact message.
+  * Fail quietly and visibly: if the balloon or the action is not there, say
+    which, once, and exit non-zero. Never retry blind, never try a
+    neighbouring action.
+  * chat.db is the referee: success means a new row of ours pointing at that
+    guid with the requested type (2000+k to add, 3000+k to remove).
+
+Action names are localized strings, read at run time from ChatKit's
+accessibility bundle; English is the fallback. `--probe` prints the action
+NAMES available on the selected balloon (never message text) so a macOS
+update that renames them can be diagnosed.
+
+Exit: 0 done (or already in the requested state); 64 bad arguments; 69 Messages
+could not start; 75 not confirmed (see stderr); 77 Accessibility not granted.
+"""
+import glob
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import sqlite3
+import subprocess
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+# kind -> (tapback index k, English action title, Sequoia+ picker identifier).
+KINDS = {
+    "love": (0, "Heart", "heart"),
+    "like": (1, "Thumbs up", "thumbsUp"),
+    "dislike": (2, "Thumbs down", "thumbsDown"),
+    "laugh": (3, "Ha ha!", "ha"),
+    "emphasize": (4, "Exclamation mark", "exclamation"),
+    "question": (5, "Question mark", "questionMark"),
+}
+PICKER_TITLES = ("Tapback", "React")   # the action that opens the picker, by macOS version
+GUID_RE = re.compile(r"[A-Za-z0-9-]{8,64}")   # message guids; "_" refused, as Beeper does
+AXBUNDLE = "/System/iOSSupport/System/Library/AccessibilityBundles/ChatKitFramework.axbundle"
+
+
+def load(name, path):
+    loader = importlib.machinery.SourceFileLoader(name, path)
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+# imsg-read owns the Messages UI lock, Accessibility checks, focus hand-back
+# and conversation clusters; reuse them rather than keep second copies.
+READ = load("blip_imsg_read_for_tapback", os.path.join(HERE, "imsg-read"))
+
+
+def die(code, msg):
+    sys.stderr.write(f"imsg-tapback: {msg}\n")
+    sys.exit(code)
+
+
+# ---------------------------------------------------------------- chat.db
+
+def db():
+    con = sqlite3.connect(f"file:{READ.DB_PATH}?mode=ro", uri=True, timeout=5)
+    con.row_factory = sqlite3.Row
+    return con
+
+
+def target_text(con, guid):
+    """The message's text as imsg reads it (text column, else attributedBody)."""
+    row = con.execute("SELECT text, attributedBody FROM message WHERE guid = ?", (guid,)).fetchone()
+    if not row:
+        return ""
+    try:
+        return row["text"] or READ.imsg_module().decode_attributed_body(row["attributedBody"]) or ""
+    except Exception:
+        return row["text"] or ""
+
+
+def write_text_file(text):
+    """0600, in the owner-only ~/.blip; removed as soon as the UI step ends."""
+    if not text.strip():
+        return ""
+    folder = os.path.expanduser("~/.blip")
+    os.makedirs(folder, mode=0o700, exist_ok=True)
+    path = os.path.join(folder, f"tapback-{os.getpid()}.txt")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
+    return path
+
+
+def target_row(con, guid):
+    return con.execute(
+        """SELECT m.ROWID, c.chat_identifier AS chat
+             FROM message m
+             LEFT JOIN chat_message_join j ON j.message_id = m.ROWID
+             LEFT JOIN chat c ON c.ROWID = j.chat_id
+            WHERE m.guid = ?""", (guid,)).fetchall()
+
+
+def my_state(con, guid):
+    """(latest type of OUR tapback on this message or None, max ROWID now).
+    One classic tapback per sender: the newest row wins, as enrich() nets it."""
+    row = con.execute(
+        """SELECT associated_message_type AS t FROM message
+            WHERE is_from_me = 1 AND associated_message_type BETWEEN 2000 AND 3999
+              AND (associated_message_guid = ? OR associated_message_guid LIKE ?)
+            ORDER BY date DESC LIMIT 1""", ("bp:" + guid, "%/" + guid)).fetchone()
+    top = con.execute("SELECT max(ROWID) FROM message").fetchone()[0] or 0
+    return (row["t"] if row else None), top
+
+
+def confirmed(guid, want_type, after_rowid, wait=6.0):
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        time.sleep(0.4)
+        try:
+            con = db()
+            try:
+                hit = con.execute(
+                    """SELECT 1 FROM message
+                        WHERE ROWID > ? AND is_from_me = 1 AND associated_message_type = ?
+                          AND (associated_message_guid = ? OR associated_message_guid LIKE ?)""",
+                    (after_rowid, want_type, "bp:" + guid, "%/" + guid)).fetchone()
+            finally:
+                con.close()
+            if hit:
+                return True
+        except sqlite3.Error:
+            pass
+    return False
+
+
+# ---------------------------------------------------------------- localized titles
+
+def localized_titles():
+    """English title -> this Mac's title, from ChatKit's accessibility strings.
+    Keys are matched through the English table, so no key names are assumed.
+    Any failure leaves English, which is right on an English Mac."""
+    out = {}
+    try:
+        langs = subprocess.run(["defaults", "read", "-g", "AppleLanguages"], capture_output=True,
+                               text=True, timeout=5).stdout
+        lang = (re.findall(r'"?([A-Za-z]{2,3}(?:[-_][A-Za-z]{2,4})?)"?', langs) or ["en"])[0]
+        tables = {}
+        for path in glob.glob(os.path.join(AXBUNDLE, "**", "Accessibility.*"), recursive=True):
+            if not path.endswith((".strings", ".loctable")):
+                continue
+            r = subprocess.run(["plutil", "-convert", "json", "-o", "-", path], capture_output=True,
+                               text=True, timeout=5)
+            if r.returncode != 0:
+                continue
+            data = json.loads(r.stdout)
+            if path.endswith(".loctable"):       # {lang: {key: value}}
+                tables.update({k: v for k, v in data.items() if isinstance(v, dict)})
+            else:                                # <lang>.lproj/Accessibility.strings
+                tables[os.path.basename(os.path.dirname(path)).split(".")[0]] = data
+        en = tables.get("en") or tables.get("English") or {}
+        local = (tables.get(lang) or tables.get(lang.replace("-", "_")) or tables.get(lang.split("-")[0].split("_")[0]) or {})
+        for title in [k[1] for k in KINDS.values()] + list(PICKER_TITLES):
+            key = next((k for k, v in en.items() if v == title), None)
+            if key and isinstance(local.get(key), str):
+                out[title] = local[key]
+    except Exception:
+        pass
+    return out
+
+
+# ---------------------------------------------------------------- the UI
+
+JXA = r"""
+function run(argv) {
+  var mode = argv[0], titles = JSON.parse(argv[1]), pickerId = argv[2], wantSelected = argv[3] === "1";
+  // The target's text, for the fallback match, comes from a 0600 file (never
+  // argv, never returned): lowercased, whitespace collapsed, first 40 chars.
+  var snippet = "";
+  if (argv[4]) {
+    ObjC.import("Foundation");
+    var s = $.NSString.stringWithContentsOfFileEncodingError(argv[4], $.NSUTF8StringEncoding, null);
+    if (s) snippet = norm(s.js).slice(0, 40);
+  }
+  function norm(t) { return String(t || "").replace(/\s+/g, " ").trim().toLowerCase(); }
+  function textMatches(cells) {
+    var hits = [];
+    if (snippet.length < 4) return hits;
+    for (var c = cells.length - 1; c >= 0; c--) {
+      var f0 = kids(cells[c])[0];
+      var d = norm(attr(cells[c], "AXDescription")) + " " + norm(f0 ? attr(f0, "AXDescription") : "");
+      if (d.indexOf(snippet) >= 0) hits.push(f0 || cells[c]);
+    }
+    return hits;
+  }
+  var se = Application("System Events");
+  var p = se.processes.byName("Messages");
+  // Two engines. Native: the AXUIElement C API called in this process, a
+  // fraction of a millisecond per read. System Events: one Apple Event per
+  // read, which timed out walking a real Messages window (2026-09-23). Native
+  // needs this process to be trusted for Accessibility (sshd-keygen-wrapper,
+  // the grant imsg-read already uses); it never prompts. Anything odd in the
+  // bridge and it falls back to System Events.
+  var NAT = null, WHY = {};
+  var T0 = Date.now();
+  function late() { return Date.now() - T0 > 40000; }
+  function nRaw(el, name) { var r = Ref(); try { return $.AXUIElementCopyAttributeValue(el, name, r) === 0 ? r[0] : null; } catch (e) { return null; } }
+  function nList(v) {
+    if (!v) return [];
+    var a = ObjC.castRefToObject(v), out = [];
+    for (var i = 0; i < a.count; i++) out.push(ObjC.castObjectToRef(a.objectAtIndex(i)));
+    return out;
+  }
+  function nVal(v) {
+    if (!v) return null;
+    var o = ObjC.castRefToObject(v);
+    if (o.isKindOfClass($.NSString)) return o.js;
+    if (o.isKindOfClass($.NSNumber)) return !!o.boolValue;
+    if (o.isKindOfClass($.NSArray)) return nList(v);
+    return null;
+  }
+  try {
+    ObjC.import("AppKit");
+    ObjC.import("ApplicationServices");
+    WHY.fns = [typeof $.AXIsProcessTrusted, typeof $.AXUIElementCreateApplication, typeof $.AXUIElementCopyAttributeValue].join(",");
+    var running = $.NSRunningApplication.runningApplicationsWithBundleIdentifier("com.apple.MobileSMS");
+    WHY.running = running.count;
+    WHY.trusted = !!$.AXIsProcessTrusted();
+    if (WHY.trusted && running.count > 0) {
+      var axApp = $.AXUIElementCreateApplication(running.objectAtIndex(0).processIdentifier);
+      try { $.AXUIElementSetMessagingTimeout(axApp, 2.0); } catch (e) { WHY.timeoutErr = String(e); }
+      var r0 = Ref(); WHY.appErr = $.AXUIElementCopyAttributeValue(axApp, "AXRole", r0);
+      WHY.appRole = nVal(r0[0]);
+      if (WHY.appRole === "AXApplication") {
+        var w0 = nList(nRaw(axApp, "AXWindows"));
+        WHY.windows = w0.length;
+        WHY.win0Role = w0.length ? nVal(nRaw(w0[0], "AXRole")) : null;
+        if (!w0.length || WHY.win0Role === "AXWindow") NAT = axApp;
+      }
+    }
+  } catch (e) { NAT = null; WHY.err = String(e); }
+  WHY.ms = Date.now() - T0;
+  if (mode === "engine") return JSON.stringify({ ok: true, engine: NAT ? "native" : "system-events", why: WHY });
+  var ENGINE = NAT ? "native" : "system-events";
+  function attr(el, name) {
+    if (NAT) { try { return nVal(nRaw(el, name)); } catch (e) { return null; } }
+    try { return el.attributes.byName(name).value(); } catch (e) { return null; }
+  }
+  function kids(el) {
+    if (NAT) { try { return nList(nRaw(el, "AXChildren")); } catch (e) { return []; } }
+    try { return el.uiElements(); } catch (e) { return []; }
+  }
+  function names(el) {
+    if (NAT) {
+      var r = Ref();
+      try { return $.AXUIElementCopyActionNames(el, r) === 0 ? nList(r[0]).map(function (x) { return ObjC.castRefToObject(x).js; }) : []; } catch (e) { return []; }
+    }
+    try { return el.actions().map(function (a) { return a.name(); }); } catch (e) { return []; }
+  }
+  function perform(el, name) {   // exact action name
+    if (NAT) { try { return $.AXUIElementPerformAction(el, name) === 0; } catch (e) { return false; } }
+    try { el.actions.byName(name).perform(); return true; } catch (e) { return false; }
+  }
+  // Every attribute read is an Apple Event, so the walk is pruned: lists,
+  // tables and outlines that are not the target (the conversation sidebar,
+  // hundreds of rows) are never entered.
+  var PRUNE = { AXTable: 1, AXOutline: 1, AXList: 1, AXRow: 1, AXCell: 1, AXStaticText: 1, AXImage: 1, AXButton: 1, AXTextArea: 1, AXTextField: 1 };
+  // One Apple Event per attribute per element is what timed out (a real
+  // window, 60 s, 2026-09-23). System Events answers a property of a whole
+  // element list in ONE event, so the walk reads each node's children, their
+  // roles and their identifiers as three events, whatever the child count
+  // (Fileri, #69: bulk fetches are the floor of this approach).
+  function children(el) {
+    var k = kids(el);
+    if (!k.length) return [];
+    var roles = null, ids = null;
+    if (!NAT) {
+      try { roles = el.uiElements.role(); } catch (e) {}
+      try { ids = el.uiElements.attributes.byName("AXIdentifier").value(); } catch (e) {}
+      if (roles && roles.length !== k.length) roles = null;
+      if (ids && ids.length !== k.length) ids = null;
+    }
+    return k.map(function (c, i) {
+      var role = roles ? roles[i] : attr(c, "AXRole");
+      var id = ids ? ids[i] : ((NAT || !PRUNE[role]) ? attr(c, "AXIdentifier") : null);
+      return { el: c, role: role, id: id };
+    });
+  }
+  function findAll(root, id, budget, want) {
+    var queue = [root], seen = 0, out = [];
+    while (queue.length && seen < budget && out.length < (want || 1e9) && !late()) {
+      var ch = children(queue.shift());
+      for (var i = 0; i < ch.length; i++) {
+        seen++;
+        if (ch[i].id === id) { out.push(ch[i].el); continue; }
+        if (!PRUNE[ch[i].role]) queue.push(ch[i].el);
+      }
+    }
+    return out;
+  }
+  function find(root, id, budget) { return findAll(root, id, budget, 1)[0] || null; }
+  function actionOn(el, title) {
+    var acts; try { acts = el.actions(); } catch (e) { return null; }
+    for (var i = 0; i < acts.length; i++) {
+      var n = acts[i].name();
+      if (n === "Name:" + title || n.indexOf("Name:" + title + "\n") === 0) return acts[i];
+    }
+    return null;
+  }
+  var wins = NAT ? nList(nRaw(NAT, "AXWindows")) : p.windows();
+  if (!wins.length) return JSON.stringify({ ok: false, why: "Messages has no window open" });
+  if (mode === "diag") {
+    // Structure only, never text: roles, counts, selection flags, action
+    // names (first line). AXDescription holds message text, so it is never
+    // returned; only whether it is empty.
+    function sum(el) {
+      return { role: attr(el, "AXRole"), sub: attr(el, "AXSubrole"), id: attr(el, "AXIdentifier"),
+               sel: attr(el, "AXSelected"), foc: attr(el, "AXFocused"), hasDesc: !!attr(el, "AXDescription"),
+               n: kids(el).length, acts: names(el).map(function (s) { return s.split("\n")[0]; }) };
+    }
+    var out = { windows: wins.length, transcripts: [] };
+    for (var w = 0; w < wins.length; w++) {
+      var queue = [wins[w]], seen = 0;
+      while (queue.length && seen < 700) {
+        var el = queue.shift(); seen++;
+        var isT = attr(el, "AXIdentifier") === "TranscriptCollectionView";
+        if (!isT && PRUNE[attr(el, "AXRole")]) continue;
+        if (isT) {
+          var cells = kids(el), last = [];
+          var selKids = (attr(el, "AXSelectedChildren") || []).length;
+          for (var c = Math.max(0, cells.length - 6); c < cells.length; c++) {
+            var cs = sum(cells[c]); var k0 = kids(cells[c]);
+            cs.first = k0.length ? sum(k0[0]) : null;
+            cs.firstFirst = k0.length && kids(k0[0]).length ? sum(kids(k0[0])[0]) : null;
+            last.push(cs);
+          }
+          var selIdx = [];
+          for (var c = 0; c < cells.length; c++) {
+            var f0 = kids(cells[c])[0];
+            if (attr(cells[c], "AXSelected") === true) selIdx.push("cell:" + c);
+            if (f0 && attr(f0, "AXSelected") === true) selIdx.push("first:" + c);
+            if (f0 && attr(f0, "AXFocused") === true) selIdx.push("focused:" + c);
+          }
+          out.transcripts.push({ window: w, textMatches: textMatches(cells).length, role: attr(el, "AXRole"), desc: attr(el, "AXDescription"), cells: cells.length, selectedChildren: selKids, selected: selIdx, last: last, visited: seen });
+          continue;
+        }
+        var k = kids(el); for (var i = 0; i < k.length; i++) queue.push(k[i]);
+      }
+    }
+    out.engine = ENGINE;
+    return JSON.stringify({ ok: true, diag: out });
+  }
+  // Measured on macOS 26 (--probe, 2026-09-23): no cell ever reads
+  // AXSelected; the deep link with overlay=1 opens a "Reply transcript"
+  // pop-over holding just that message, and each message's first child
+  // carries the tapback actions ("Name:Heart", ...).
+  function actName(el, title) {
+    if (!NAT) return null;
+    var ns = names(el);
+    for (var i = 0; i < ns.length; i++) if (ns[i] === "Name:" + title || ns[i].indexOf("Name:" + title + "\n") === 0) return ns[i];
+    return null;
+  }
+  function act(el, title) {
+    if (NAT) { var n = actName(el, title); return !!n && perform(el, n); }
+    try {   // one Apple Event to find, one to perform
+      var a = el.actions.whose({ name: { _beginsWith: "Name:" + title } })();
+      if (a.length) { a[0].perform(); return true; }
+    } catch (e) {}
+    return false;
+  }
+  function hasAct(el, title) {
+    if (NAT) return !!actName(el, title);
+    try { return el.actions.whose({ name: { _beginsWith: "Name:" + title } })().length > 0; } catch (e) { return false; }
+  }
+  var ts = [];
+  for (var w = 0; w < wins.length && ts.length < 2; w++) ts = ts.concat(findAll(wins[w], "TranscriptCollectionView", 600, 2 - ts.length));
+  if (!ts.length) return JSON.stringify({ ok: false, why: "the conversation transcript was not found (" + ENGINE + ", " + Math.round((Date.now() - T0) / 1000) + " s)" });
+  if (mode === "close") {
+    // The pop-over is the smaller transcript when two are open; AXCancel closes it.
+    if (ts.length < 2) return JSON.stringify({ ok: true, closed: false });
+    var sz = ts.map(function (t) { return { t: t, n: kids(t).length }; });
+    sz.sort(function (a, b) { return a.n - b.n; });
+    ts = sz.map(function (x) { return x.t; });
+    if (!perform(ts[0], "AXCancel")) { var c0 = kids(ts[0]); if (c0.length) perform(c0[c0.length - 1], "AXCancel"); }
+    return JSON.stringify({ ok: true, closed: true });
+  }
+  // Per cell of a transcript: does its first child (the balloon) carry the
+  // tapback actions, and does the cell or balloon text hold the snippet.
+  // Bulk: one event for all balloons' action names, one per description level.
+  function survey(t) {
+    var cells = kids(t), out = [];
+    var acts = null, d0 = null, d1 = null;
+    if (!NAT) {
+      try { acts = t.uiElements.uiElements.actions.name(); } catch (e) {}
+      try { d0 = t.uiElements.description(); } catch (e) {}
+      try { d1 = t.uiElements.uiElements.description(); } catch (e) {}
+      if (acts && acts.length !== cells.length) acts = null;
+      if (d0 && d0.length !== cells.length) d0 = null;
+      if (d1 && d1.length !== cells.length) d1 = null;
+    }
+    function has(list, title) {
+      for (var i = 0; i < list.length; i++) if (list[i] === "Name:" + title || String(list[i]).indexOf("Name:" + title + "\n") === 0) return true;
+      return false;
+    }
+    for (var c = 0; c < cells.length; c++) {
+      var a0 = acts ? (acts[c] && acts[c][0]) || [] : null;
+      var hasTb, text;
+      if (a0) hasTb = has(a0, titles.direct) || has(a0, titles.picker[0]);
+      else { var f = kids(cells[c])[0]; hasTb = !!f && (hasAct(f, titles.direct) || hasAct(f, titles.picker[0])); }
+      if (d0 && d1) text = norm(d0[c]) + " " + norm(d1[c] && d1[c][0]);
+      else { var f1 = kids(cells[c])[0]; text = norm(attr(cells[c], "AXDescription")) + " " + norm(f1 ? attr(f1, "AXDescription") : ""); }
+      out.push({ c: c, cells: cells, tb: hasTb, hit: snippet.length >= 4 && text.indexOf(snippet) >= 0 });
+    }
+    return out;
+  }
+  function balloon(s) { return kids(s.cells[s.c])[0] || s.cells[s.c]; }
+  var sized = ts.map(function (t) { return { t: t, n: kids(t).length }; });
+  sized.sort(function (a, b) { return a.n - b.n; });   // pop-over first
+  ts = sized.map(function (x) { return x.t; });
+  var cell = null, via = "";
+  for (var t = 0; t < ts.length && !cell; t++) {
+    var sv = survey(ts[t]);
+    var msgs = sv.filter(function (x) { return x.tb; }), hits = sv.filter(function (x) { return x.hit; });
+    // The pop-over: exactly one message, and (when it has text) the text agrees.
+    if (msgs.length === 1 && (snippet.length < 4 || hits.length === 1)) { cell = balloon(msgs[0]); via = "popover"; break; }
+    // Otherwise the one message on screen whose description holds its text (#69).
+    if (hits.length === 1) { cell = balloon(hits[0]); via = "text"; }
+    else if (hits.length > 1) return JSON.stringify({ ok: false, why: "more than one message on screen matches; not guessing" });
+  }
+  if (!cell) return JSON.stringify({ ok: false, why: "could not single out the message on screen (" + ENGINE + ", " + Math.round((Date.now() - T0) / 1000) + " s)" });
+  if (act(cell, titles.direct)) return JSON.stringify({ ok: true, via: "action/" + via + "/" + ENGINE });
+  // No direct action on this build: open the picker and press its button.
+  var opened = false;
+  for (var j = 0; j < titles.picker.length && !opened; j++) opened = act(cell, titles.picker[j]);
+  if (!opened) return JSON.stringify({ ok: false, why: "no \"" + titles.direct + "\" or Tapback action on the message (macOS may have renamed it; run --probe)" });
+  delay(0.75);
+  var picker = null;
+  for (var w = 0; w < wins.length && !picker; w++) picker = find(wins[w], "TapbackPickerCollectionView", 800);
+  if (!picker) return JSON.stringify({ ok: false, why: "the tapback picker did not open" });
+  var btn = find(picker, pickerId, 200);
+  if (!btn) return JSON.stringify({ ok: false, why: "the picker has no " + pickerId + " button" });
+  if (attr(btn, "AXSelected") === wantSelected) return JSON.stringify({ ok: true, via: "already" });
+  if (!perform(btn, "AXPress") && !NAT) { try { btn.click(); } catch (e) {} }
+  return JSON.stringify({ ok: true, via: "picker" });
+}
+"""
+
+
+TEXT_FILE = ""
+
+
+def jxa(mode, titles, picker_id, want_selected):
+    try:
+        r = subprocess.run(["osascript", "-l", "JavaScript", "-e", JXA, mode, json.dumps(titles), picker_id,
+                            "1" if want_selected else "0", TEXT_FILE], capture_output=True, text=True,
+                           timeout=150 if mode == "diag" else 60)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "why": "the accessibility script timed out"}
+    try:
+        return json.loads((r.stdout or "").strip().splitlines()[-1])
+    except Exception:
+        return {"ok": False, "why": (r.stderr or r.stdout or "osascript failed").strip().splitlines()[-1]}
+
+
+def select_message(guid, overlay=False):
+    """Deep-link to the exact message; Messages scrolls to it and selects it.
+    With overlay it opens in the reply-transcript pop-over instead (Beeper's
+    default on macOS 12+). `open -g` keeps Messages from taking the
+    foreground where it can."""
+    url = "imessage://open?message-guid=" + guid + ("&overlay=1" if overlay else "")
+    try:
+        r = subprocess.run(["open", "-g", url], capture_output=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        return "opening the message timed out"
+    if r.returncode != 0:
+        return f"could not open the message (open exited {r.returncode})"
+    time.sleep(1.2)
+    # A background open does not create a window when Messages has none (it
+    # was closed, not quit). Then open it for real, once, and link again.
+    code, out = READ.osa('tell application "System Events" to tell process "Messages" to count windows')
+    if code == 0 and out.strip() == "0":
+        subprocess.run(["open", "-a", "Messages"], capture_output=True, timeout=30)
+        time.sleep(1.5)
+        subprocess.run(["open", "-g", url], capture_output=True, timeout=30)
+        time.sleep(1.2)
+    return ""
+
+
+# ---------------------------------------------------------------- main
+
+def main():
+    argv = sys.argv[1:]
+    if not argv or argv[0] in ("-h", "--help"):
+        print(__doc__.strip())
+        sys.exit(0)
+    opts, i = {"remove": False, "probe": False}, 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--engine":
+            # Which AX engine this Mac gets, and why. Touches no message.
+            print(json.dumps(jxa("engine", {}, "", False)))
+            return
+        if a in ("--remove", "--probe"):
+            opts[a[2:]] = True
+        elif a in ("--chat", "--guid", "--kind") and i + 1 < len(argv):
+            opts[a[2:]] = argv[i + 1]
+            i += 1
+        else:
+            die(64, f"unknown argument {a!r}")
+        i += 1
+    guid = opts.get("guid", "")
+    if not GUID_RE.fullmatch(guid):
+        die(64, "--guid must be a message guid")
+    kind = opts.get("kind", "love")
+    if kind not in KINDS:
+        die(64, f"--kind must be one of {', '.join(KINDS)}")
+    k, english, picker_id = KINDS[kind]
+
+    why = READ.ensure_messages()
+    if why:
+        die(69, why)
+    why = READ.accessibility()
+    if why:
+        die(77, why)
+
+    con = db()
+    try:
+        rows = target_row(con, guid)
+        if not rows:
+            die(64, "no such message on this Mac")
+        if not opts["probe"]:
+            chat = opts.get("chat", "")
+            if not chat:
+                die(64, "--chat is required")
+            cluster = set(READ.cluster_ids(con, chat))
+            if not any(r["chat"] in cluster for r in rows):
+                die(64, "that message is not in that conversation")
+        current, top = my_state(con, guid)
+        text = target_text(con, guid)
+    finally:
+        con.close()
+    global TEXT_FILE
+    TEXT_FILE = write_text_file(text)
+
+    add_type, remove_type = 2000 + k, 3000 + k
+    if not opts["probe"]:
+        if not opts["remove"] and current == add_type:
+            print("already reacted")
+            return
+        if opts["remove"] and current != add_type:
+            print("nothing to remove")
+            return
+
+    names = localized_titles()
+    titles = {"direct": names.get(english, english),
+              "picker": [names.get(t, t) for t in PICKER_TITLES] + [t for t in PICKER_TITLES if names.get(t, t) != t]}
+
+    prev = READ.frontmost()
+    if opts["probe"]:
+        # Diagnostic: structure only (roles, counts, selection flags, action
+        # names), in both deep-link modes. Never message text.
+        try:
+            report = {"titles": titles}
+            if select_message(guid):
+                die(75, "could not open the message")
+            report["main"] = jxa("diag", titles, picker_id, True)
+            if not select_message(guid, overlay=True):
+                report["overlay"] = jxa("diag", titles, picker_id, True)
+        finally:
+            READ.restore_front(prev)
+        print(json.dumps(report, ensure_ascii=False))
+        return
+    ok = False
+    try:
+        why = select_message(guid, overlay=True)
+        if why:
+            die(75, why)
+        res = jxa("act", titles, picker_id, not opts["remove"])
+        if res.get("ok") is False and "no window" in res.get("why", ""):
+            # Running without a window (closed, or launched hidden): ask
+            # Messages to reopen one and come forward, then link again, once.
+            READ.osa('tell application "Messages" to reopen')
+            READ.osa('tell application "Messages" to activate')
+            time.sleep(1.5)
+            select_message(guid, overlay=True)
+            res = jxa("act", titles, picker_id, not opts["remove"])
+        if not res.get("ok"):
+            die(75, res.get("why", "the tapback could not be performed"))
+        if res.get("via") == "already":
+            print("already in that state")
+            ok = True
+            return
+        # Verdict before closing: closing the pop-over at once can undo it (Beeper).
+        ok = confirmed(guid, remove_type if opts["remove"] else add_type, top)
+    finally:
+        jxa("close", titles, picker_id, True)
+        READ.restore_front(prev)
+    if ok:
+        print("removed" if opts["remove"] else "reacted")
+        return
+    die(75, "Messages did not record the tapback (nothing new in chat.db); not retrying")
+
+
+if __name__ == "__main__":
+    try:
+        with READ.messages_ui_lock():
+            main()
+    except (OSError, TimeoutError) as exc:
+        die(75, str(exc))
+    finally:
+        if TEXT_FILE:
+            try:
+                os.unlink(TEXT_FILE)
+            except OSError:
+                pass

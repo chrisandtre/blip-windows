@@ -117,6 +117,47 @@ struct SetupState {
     configured: bool,
     host: String,
     shims: bool,
+    /// `tapbacks=on` in bridge.conf: sending reactions is opt-in (it drives
+    /// Messages on the Mac through Accessibility, and Apple may rename the
+    /// actions it relies on in any macOS update).
+    tapbacks: bool,
+}
+
+/// One bridge.conf key, read as data (the last assignment wins, as in the shims).
+fn conf_value(key: &str) -> Option<String> {
+    let conf = std::fs::read_to_string(blip_wire::conf_path()).ok()?;
+    conf.lines()
+        .filter_map(|l| l.split('#').next())
+        .filter_map(|l| l.trim().strip_prefix(&format!("{key}=")).map(|v| v.trim().trim_matches('\x27').trim_matches('"').to_string()))
+        .last()
+}
+
+/// Set one bridge.conf key, keeping every other line as it was.
+fn set_conf_value(key: &str, value: &str) -> std::io::Result<()> {
+    let path = blip_wire::conf_path();
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut found = false;
+    let mut lines: Vec<String> = text
+        .lines()
+        .map(|l| {
+            if !found && l.trim_start().starts_with(&format!("{key}=")) {
+                found = true;
+                format!("{key}={value}")
+            } else {
+                l.to_string()
+            }
+        })
+        .collect();
+    if !found {
+        lines.push(format!("{key}={value}"));
+    }
+    std::fs::write(&path, lines.join("
+") + "
+")
+}
+
+fn tapbacks_on() -> bool {
+    matches!(conf_value("tapbacks").as_deref().map(str::to_ascii_lowercase).as_deref(), Some("on" | "yes" | "true" | "1"))
 }
 
 /// Is there a bridge.conf with a host, and are the shims in place?
@@ -130,7 +171,7 @@ fn setup_state() -> SetupState {
         .map(|v| v.trim().trim_matches('\'').trim_matches('"').to_string())
         .last()
         .unwrap_or_default();
-    SetupState { configured: !host.is_empty(), host, shims: bin_dir().join("imsg.exe").exists() }
+    SetupState { configured: !host.is_empty(), host, shims: bin_dir().join("imsg.exe").exists(), tapbacks: tapbacks_on() }
 }
 
 /// Run blip-setup.ps1 in its own console window, where ssh can ask for the
@@ -503,9 +544,11 @@ pub fn run_app() {
             let read = MenuItem::with_id(app, "mark-all-read", "Mark all as read", true, None::<&str>)?;
             let login_on = app.autolaunch().is_enabled().unwrap_or(false);
             let login = CheckMenuItem::with_id(app, "autostart", "Start Blip at login", true, login_on, None::<&str>)?;
+            let react = CheckMenuItem::with_id(app, "tapbacks", "Reactions (beta)", true, tapbacks_on(), None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit Blip", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open, &read, &PredefinedMenuItem::separator(app)?, &login, &PredefinedMenuItem::separator(app)?, &quit])?;
+            let menu = Menu::with_items(app, &[&open, &read, &PredefinedMenuItem::separator(app)?, &login, &react, &PredefinedMenuItem::separator(app)?, &quit])?;
             let login_item = login.clone();
+            let react_item = react.clone();
             let tray = TrayIconBuilder::with_id("blip")
                 .icon(Image::from_bytes(include_bytes!("../icons/tray.png"))?)
                 .tooltip("Blip")
@@ -513,6 +556,13 @@ pub fn run_app() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(move |app, e| match e.id.as_ref() {
                     "open" => show_main(app.clone()),
+                    "tapbacks" => {
+                        let want = !tapbacks_on();
+                        let _ = set_conf_value("tapbacks", if want { "on" } else { "off" });
+                        let now = tapbacks_on();
+                        let _ = react_item.set_checked(now);
+                        let _ = app.emit("blip://tapbacks", now);
+                    }
                     "autostart" => {
                         let al = app.autolaunch();
                         let want = !al.is_enabled().unwrap_or(false);

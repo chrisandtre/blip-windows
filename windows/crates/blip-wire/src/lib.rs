@@ -28,7 +28,7 @@ pub const EXIT_CONFIG: i32 = 78;
 
 /// The tools blip-dispatch runs, plus its "ping" probe. Same list as
 /// bridge/mac/blip-dispatch; anything else is refused before it leaves this PC.
-pub const TOOLS: &[&str] = &["imsg", "imsg-send", "imsg-read", "contacts", "contact-save", "blip-check"];
+pub const TOOLS: &[&str] = &["imsg", "imsg-send", "imsg-read", "imsg-tapback", "contacts", "contact-save", "blip-check"];
 
 pub fn is_tool(name: &str) -> bool {
     name == "ping" || TOOLS.contains(&name)

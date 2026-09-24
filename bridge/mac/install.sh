@@ -21,7 +21,7 @@ dest="$HOME/.blip/bin"
 # denial (#36, Astra #11).
 check=1; for a in "$@"; do [[ $a == --no-check ]] && check=0; done
 mkdir -p "$dest"
-for t in imsg imsg-send imsg-read contacts contact-repair.js contact-save contact-save.js tcc-check blip-check blip-dispatch calling_codes.py; do
+for t in imsg imsg-send imsg-read imsg-tapback contacts contact-repair.js contact-save contact-save.js tcc-check blip-check blip-dispatch calling_codes.py; do
   if [[ -f "$here/$t" ]]; then
     install -m 0755 "$here/$t" "$dest/$t"
   else

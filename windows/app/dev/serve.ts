@@ -94,10 +94,17 @@ Bun.serve({
     } else if (cmd === "shim") {
       const tool = String(args.tool);
       if (tool === "imsg-send") body = await fakeSend("imsg-send", (args.stdin as string) ?? null);
+      else if (tool === "imsg-tapback") {
+        // Fake reaction: nothing reaches the Mac. "--guid FAIL..." never exists.
+        await Bun.sleep(1500);
+        const a = args.args as string[];
+        console.log(`[mock] FAKE tapback ${a[a.indexOf("--kind") + 1]}${a.includes("--remove") ? " (remove)" : ""} (nothing sent)`);
+        body = { code: 0, stdout: "reacted", stderr: "" };
+      }
       else if (!READ_TOOLS.has(tool)) body = { code: 64, stdout: "", stderr: `mock: '${tool}' not allowed` };
       else body = await run([join(home, "bin", `${tool}.exe`), ...(args.args as string[])], (args.stdin as string) ?? null);
     } else if (cmd === "setup_state") {
-      body = { configured: true, host: "mock", shims: true };
+      body = { configured: true, host: "mock", shims: true, tapbacks: true };
     }
     return Response.json(body, { headers: cors });
   },

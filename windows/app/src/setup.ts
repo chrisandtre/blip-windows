@@ -3,7 +3,7 @@
 // password and fingerprint.
 import { invoke } from "@tauri-apps/api/core";
 
-export interface SetupState { configured: boolean; host: string; shims: boolean }
+export interface SetupState { configured: boolean; host: string; shims: boolean; tapbacks: boolean }
 
 export function setupState(): Promise<SetupState> {
   return invoke<SetupState>("setup_state");

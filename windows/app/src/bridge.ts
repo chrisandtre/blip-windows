@@ -67,6 +67,8 @@ export interface Bubble {
   scheduled?: boolean;
   scheduledFor?: string;
   localId?: number;
+  /** The Mac's guid for the message: what a reaction is aimed at. */
+  guid?: string;
 }
 
 export interface PendingSend { chat: string; text: string; ts: string; localId: number; failed?: boolean; failureReason?: string }

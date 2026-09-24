@@ -93,6 +93,8 @@ export interface ImsgMessage {
   /** Rich-link card from a URL balloon (imsg ≥1.12): the preview image is a
    *  regular attachment id (a .pluginPayloadAttachment PNG). */
   link?: LinkCard | null;
+  /** The message row's own guid (imsg --rich): what a tapback row points at. */
+  guid?: string | null;
 }
 
 export interface LinkCard { url: string; title: string; summary: string; image_id: string }
