@@ -212,9 +212,60 @@ function run(argv) {
   }
   var se = Application("System Events");
   var p = se.processes.byName("Messages");
-  function attr(el, name) { try { return el.attributes.byName(name).value(); } catch (e) { return null; } }
-  function kids(el) { try { return el.uiElements(); } catch (e) { return []; } }
-  function names(el) { try { return el.actions().map(function (a) { return a.name(); }); } catch (e) { return []; } }
+  // Two engines. Native: the AXUIElement C API called in this process, a
+  // fraction of a millisecond per read. System Events: one Apple Event per
+  // read, which timed out walking a real Messages window (2026-09-23). Native
+  // needs this process to be trusted for Accessibility (sshd-keygen-wrapper,
+  // the grant imsg-read already uses); it never prompts. Anything odd in the
+  // bridge and it falls back to System Events.
+  var NAT = null;
+  function nRaw(el, name) { var r = Ref(); try { return $.AXUIElementCopyAttributeValue(el, name, r) === 0 ? r[0] : null; } catch (e) { return null; } }
+  function nList(v) {
+    if (!v) return [];
+    var a = ObjC.castRefToObject(v), out = [];
+    for (var i = 0; i < a.count; i++) out.push(ObjC.castObjectToRef(a.objectAtIndex(i)));
+    return out;
+  }
+  function nVal(v) {
+    if (!v) return null;
+    var o = ObjC.castRefToObject(v);
+    if (o.isKindOfClass($.NSString)) return o.js;
+    if (o.isKindOfClass($.NSNumber)) return !!o.boolValue;
+    if (o.isKindOfClass($.NSArray)) return nList(v);
+    return null;
+  }
+  try {
+    ObjC.import("AppKit");
+    ObjC.import("ApplicationServices");
+    var running = $.NSRunningApplication.runningApplicationsWithBundleIdentifier("com.apple.MobileSMS");
+    if ($.AXIsProcessTrusted() && running.count > 0) {
+      var axApp = $.AXUIElementCreateApplication(running.objectAtIndex(0).processIdentifier);
+      if (nVal(nRaw(axApp, "AXRole")) === "AXApplication") {
+        var w0 = nList(nRaw(axApp, "AXWindows"));
+        if (!w0.length || nVal(nRaw(w0[0], "AXRole")) === "AXWindow") NAT = axApp;
+      }
+    }
+  } catch (e) { NAT = null; }
+  var ENGINE = NAT ? "native" : "system-events";
+  function attr(el, name) {
+    if (NAT) { try { return nVal(nRaw(el, name)); } catch (e) { return null; } }
+    try { return el.attributes.byName(name).value(); } catch (e) { return null; }
+  }
+  function kids(el) {
+    if (NAT) { try { return nList(nRaw(el, "AXChildren")); } catch (e) { return []; } }
+    try { return el.uiElements(); } catch (e) { return []; }
+  }
+  function names(el) {
+    if (NAT) {
+      var r = Ref();
+      try { return $.AXUIElementCopyActionNames(el, r) === 0 ? nList(r[0]).map(function (x) { return ObjC.castRefToObject(x).js; }) : []; } catch (e) { return []; }
+    }
+    try { return el.actions().map(function (a) { return a.name(); }); } catch (e) { return []; }
+  }
+  function perform(el, name) {   // exact action name
+    if (NAT) { try { return $.AXUIElementPerformAction(el, name) === 0; } catch (e) { return false; } }
+    try { el.actions.byName(name).perform(); return true; } catch (e) { return false; }
+  }
   // Every attribute read is an Apple Event, so the walk is pruned: lists,
   // tables and outlines that are not the target (the conversation sidebar,
   // hundreds of rows) are never entered.
@@ -237,7 +288,7 @@ function run(argv) {
     }
     return null;
   }
-  var wins = p.windows();
+  var wins = NAT ? nList(nRaw(NAT, "AXWindows")) : p.windows();
   if (!wins.length) return JSON.stringify({ ok: false, why: "Messages has no window open" });
   if (mode === "diag") {
     // Structure only, never text: roles, counts, selection flags, action
@@ -257,7 +308,7 @@ function run(argv) {
         if (!isT && PRUNE[attr(el, "AXRole")]) continue;
         if (isT) {
           var cells = kids(el), last = [];
-          var selKids = null; try { selKids = el.attributes.byName("AXSelectedChildren").value().length; } catch (e) {}
+          var selKids = (attr(el, "AXSelectedChildren") || []).length;
           for (var c = Math.max(0, cells.length - 6); c < cells.length; c++) {
             var cs = sum(cells[c]); var k0 = kids(cells[c]);
             cs.first = k0.length ? sum(k0[0]) : null;
@@ -277,6 +328,7 @@ function run(argv) {
         var k = kids(el); for (var i = 0; i < k.length; i++) queue.push(k[i]);
       }
     }
+    out.engine = ENGINE;
     return JSON.stringify({ ok: true, diag: out });
   }
   // Measured on macOS 26 (--probe, 2026-09-23): no cell ever reads
@@ -293,14 +345,22 @@ function run(argv) {
     }
     return out;
   }
-  function act(el, title) {   // one Apple Event to find, one to perform
-    try {
+  function actName(el, title) {
+    if (!NAT) return null;
+    var ns = names(el);
+    for (var i = 0; i < ns.length; i++) if (ns[i] === "Name:" + title || ns[i].indexOf("Name:" + title + "\n") === 0) return ns[i];
+    return null;
+  }
+  function act(el, title) {
+    if (NAT) { var n = actName(el, title); return !!n && perform(el, n); }
+    try {   // one Apple Event to find, one to perform
       var a = el.actions.whose({ name: { _beginsWith: "Name:" + title } })();
       if (a.length) { a[0].perform(); return true; }
     } catch (e) {}
     return false;
   }
   function hasAct(el, title) {
+    if (NAT) return !!actName(el, title);
     try { return el.actions.whose({ name: { _beginsWith: "Name:" + title } })().length > 0; } catch (e) { return false; }
   }
   var ts = [];
@@ -310,9 +370,7 @@ function run(argv) {
     // The pop-over is the smaller transcript when two are open; AXCancel closes it.
     if (ts.length < 2) return JSON.stringify({ ok: true, closed: false });
     ts.sort(function (a, b) { return kids(a).length - kids(b).length; });
-    try { ts[0].actions.byName("AXCancel").perform(); } catch (e) {
-      var c0 = kids(ts[0]); try { c0[c0.length - 1].actions.byName("AXCancel").perform(); } catch (e2) {}
-    }
+    if (!perform(ts[0], "AXCancel")) { var c0 = kids(ts[0]); if (c0.length) perform(c0[c0.length - 1], "AXCancel"); }
     return JSON.stringify({ ok: true, closed: true });
   }
   ts.sort(function (a, b) { return kids(a).length - kids(b).length; });   // pop-over first
@@ -331,7 +389,7 @@ function run(argv) {
     else if (hits.length > 1) return JSON.stringify({ ok: false, why: "more than one message on screen matches; not guessing" });
   }
   if (!cell) return JSON.stringify({ ok: false, why: "could not single out the message on screen" });
-  if (act(cell, titles.direct)) return JSON.stringify({ ok: true, via: "action/" + via });
+  if (act(cell, titles.direct)) return JSON.stringify({ ok: true, via: "action/" + via + "/" + ENGINE });
   // No direct action on this build: open the picker and press its button.
   var opened = false;
   for (var j = 0; j < titles.picker.length && !opened; j++) opened = act(cell, titles.picker[j]);
@@ -343,7 +401,7 @@ function run(argv) {
   var btn = find(picker, pickerId, 200);
   if (!btn) return JSON.stringify({ ok: false, why: "the picker has no " + pickerId + " button" });
   if (attr(btn, "AXSelected") === wantSelected) return JSON.stringify({ ok: true, via: "already" });
-  try { btn.actions.byName("AXPress").perform(); } catch (e) { btn.click(); }
+  if (!perform(btn, "AXPress") && !NAT) { try { btn.click(); } catch (e) {} }
   return JSON.stringify({ ok: true, via: "picker" });
 }
 """
