@@ -506,6 +506,22 @@ def select_message(guid, overlay=False):
 
 # ---------------------------------------------------------------- main
 
+def screen_locked():
+    """True when the login session is locked (screen saver with password,
+    lock screen). A locked session hides every app's windows from UI
+    scripting, so a tapback cannot work until someone unlocks. ioreg is read
+    only and needs no permission."""
+    try:
+        out = subprocess.run(["ioreg", "-n", "Root", "-d1", "-a"], capture_output=True, timeout=5).stdout
+        import plistlib
+        for user in plistlib.loads(out).get("IOConsoleUsers", []):
+            if user.get("CGSSessionScreenIsLocked"):
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def main():
     argv = sys.argv[1:]
     if not argv or argv[0] in ("-h", "--help"):
@@ -540,6 +556,8 @@ def main():
     why = READ.accessibility()
     if why:
         die(77, why)
+    if screen_locked() and not opts["probe"]:
+        die(75, "the Mac is locked; reactions need it unlocked (the display can be off)")
 
     con = db()
     try:
