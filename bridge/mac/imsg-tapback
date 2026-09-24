@@ -475,6 +475,14 @@ def main():
         if why:
             die(75, why)
         res = jxa("act", titles, picker_id, not opts["remove"])
+        if res.get("ok") is False and "no window" in res.get("why", ""):
+            # Running without a window (closed, or launched hidden): ask
+            # Messages to reopen one and come forward, then link again, once.
+            READ.osa('tell application "Messages" to reopen')
+            READ.osa('tell application "Messages" to activate')
+            time.sleep(1.5)
+            select_message(guid, overlay=True)
+            res = jxa("act", titles, picker_id, not opts["remove"])
         if not res.get("ok"):
             die(75, res.get("why", "the tapback could not be performed"))
         if res.get("via") == "already":
