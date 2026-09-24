@@ -378,6 +378,14 @@ def select_message(guid, overlay=False):
     if r.returncode != 0:
         return f"could not open the message (open exited {r.returncode})"
     time.sleep(1.2)
+    # A background open does not create a window when Messages has none (it
+    # was closed, not quit). Then open it for real, once, and link again.
+    code, out = READ.osa('tell application "System Events" to tell process "Messages" to count windows')
+    if code == 0 and out.strip() == "0":
+        subprocess.run(["open", "-a", "Messages"], capture_output=True, timeout=30)
+        time.sleep(1.5)
+        subprocess.run(["open", "-g", url], capture_output=True, timeout=30)
+        time.sleep(1.2)
     return ""
 
 
