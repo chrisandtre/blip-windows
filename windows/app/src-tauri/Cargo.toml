@@ -1,6 +1,6 @@
 [package]
 name = "blip-app"
-version = "0.1.0"
+version = "0.2.0"
 description = "Blip for Windows: iMessage through your Mac"
 edition.workspace = true
 license.workspace = true
