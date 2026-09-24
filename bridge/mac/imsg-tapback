@@ -283,16 +283,40 @@ function run(argv) {
   // tables and outlines that are not the target (the conversation sidebar,
   // hundreds of rows) are never entered.
   var PRUNE = { AXTable: 1, AXOutline: 1, AXList: 1, AXRow: 1, AXCell: 1, AXStaticText: 1, AXImage: 1, AXButton: 1, AXTextArea: 1, AXTextField: 1 };
-  function find(root, id, budget) {
-    var queue = [root], seen = 0;
-    while (queue.length && seen < budget) {
-      var el = queue.shift(); seen++;
-      if (attr(el, "AXIdentifier") === id) return el;
-      if (PRUNE[attr(el, "AXRole")]) continue;
-      var k = kids(el); for (var i = 0; i < k.length; i++) queue.push(k[i]);
+  // One Apple Event per attribute per element is what timed out (a real
+  // window, 60 s, 2026-09-23). System Events answers a property of a whole
+  // element list in ONE event, so the walk reads each node's children, their
+  // roles and their identifiers as three events, whatever the child count
+  // (Fileri, #69: bulk fetches are the floor of this approach).
+  function children(el) {
+    var k = kids(el);
+    if (!k.length) return [];
+    var roles = null, ids = null;
+    if (!NAT) {
+      try { roles = el.uiElements.role(); } catch (e) {}
+      try { ids = el.uiElements.attributes.byName("AXIdentifier").value(); } catch (e) {}
+      if (roles && roles.length !== k.length) roles = null;
+      if (ids && ids.length !== k.length) ids = null;
     }
-    return null;
+    return k.map(function (c, i) {
+      var role = roles ? roles[i] : attr(c, "AXRole");
+      var id = ids ? ids[i] : ((NAT || !PRUNE[role]) ? attr(c, "AXIdentifier") : null);
+      return { el: c, role: role, id: id };
+    });
   }
+  function findAll(root, id, budget, want) {
+    var queue = [root], seen = 0, out = [];
+    while (queue.length && seen < budget && out.length < (want || 1e9) && !late()) {
+      var ch = children(queue.shift());
+      for (var i = 0; i < ch.length; i++) {
+        seen++;
+        if (ch[i].id === id) { out.push(ch[i].el); continue; }
+        if (!PRUNE[ch[i].role]) queue.push(ch[i].el);
+      }
+    }
+    return out;
+  }
+  function find(root, id, budget) { return findAll(root, id, budget, 1)[0] || null; }
   function actionOn(el, title) {
     var acts; try { acts = el.actions(); } catch (e) { return null; }
     for (var i = 0; i < acts.length; i++) {
@@ -348,16 +372,6 @@ function run(argv) {
   // AXSelected; the deep link with overlay=1 opens a "Reply transcript"
   // pop-over holding just that message, and each message's first child
   // carries the tapback actions ("Name:Heart", ...).
-  function findAll(root, id, budget) {
-    var queue = [root], seen = 0, out = [];
-    while (queue.length && seen < budget && !late()) {
-      var el = queue.shift(); seen++;
-      if (attr(el, "AXIdentifier") === id) { out.push(el); continue; }
-      if (PRUNE[attr(el, "AXRole")]) continue;
-      var k = kids(el); for (var i = 0; i < k.length; i++) queue.push(k[i]);
-    }
-    return out;
-  }
   function actName(el, title) {
     if (!NAT) return null;
     var ns = names(el);
@@ -377,28 +391,58 @@ function run(argv) {
     try { return el.actions.whose({ name: { _beginsWith: "Name:" + title } })().length > 0; } catch (e) { return false; }
   }
   var ts = [];
-  for (var w = 0; w < wins.length; w++) ts = ts.concat(findAll(wins[w], "TranscriptCollectionView", 300));
+  for (var w = 0; w < wins.length && ts.length < 2; w++) ts = ts.concat(findAll(wins[w], "TranscriptCollectionView", 600, 2 - ts.length));
   if (!ts.length) return JSON.stringify({ ok: false, why: "the conversation transcript was not found (" + ENGINE + ", " + Math.round((Date.now() - T0) / 1000) + " s)" });
   if (mode === "close") {
     // The pop-over is the smaller transcript when two are open; AXCancel closes it.
     if (ts.length < 2) return JSON.stringify({ ok: true, closed: false });
-    ts.sort(function (a, b) { return kids(a).length - kids(b).length; });
+    var sz = ts.map(function (t) { return { t: t, n: kids(t).length }; });
+    sz.sort(function (a, b) { return a.n - b.n; });
+    ts = sz.map(function (x) { return x.t; });
     if (!perform(ts[0], "AXCancel")) { var c0 = kids(ts[0]); if (c0.length) perform(c0[c0.length - 1], "AXCancel"); }
     return JSON.stringify({ ok: true, closed: true });
   }
-  ts.sort(function (a, b) { return kids(a).length - kids(b).length; });   // pop-over first
+  // Per cell of a transcript: does its first child (the balloon) carry the
+  // tapback actions, and does the cell or balloon text hold the snippet.
+  // Bulk: one event for all balloons' action names, one per description level.
+  function survey(t) {
+    var cells = kids(t), out = [];
+    var acts = null, d0 = null, d1 = null;
+    if (!NAT) {
+      try { acts = t.uiElements.uiElements.actions.name(); } catch (e) {}
+      try { d0 = t.uiElements.description(); } catch (e) {}
+      try { d1 = t.uiElements.uiElements.description(); } catch (e) {}
+      if (acts && acts.length !== cells.length) acts = null;
+      if (d0 && d0.length !== cells.length) d0 = null;
+      if (d1 && d1.length !== cells.length) d1 = null;
+    }
+    function has(list, title) {
+      for (var i = 0; i < list.length; i++) if (list[i] === "Name:" + title || String(list[i]).indexOf("Name:" + title + "\n") === 0) return true;
+      return false;
+    }
+    for (var c = 0; c < cells.length; c++) {
+      var a0 = acts ? (acts[c] && acts[c][0]) || [] : null;
+      var hasTb, text;
+      if (a0) hasTb = has(a0, titles.direct) || has(a0, titles.picker[0]);
+      else { var f = kids(cells[c])[0]; hasTb = !!f && (hasAct(f, titles.direct) || hasAct(f, titles.picker[0])); }
+      if (d0 && d1) text = norm(d0[c]) + " " + norm(d1[c] && d1[c][0]);
+      else { var f1 = kids(cells[c])[0]; text = norm(attr(cells[c], "AXDescription")) + " " + norm(f1 ? attr(f1, "AXDescription") : ""); }
+      out.push({ c: c, cells: cells, tb: hasTb, hit: snippet.length >= 4 && text.indexOf(snippet) >= 0 });
+    }
+    return out;
+  }
+  function balloon(s) { return kids(s.cells[s.c])[0] || s.cells[s.c]; }
+  var sized = ts.map(function (t) { return { t: t, n: kids(t).length }; });
+  sized.sort(function (a, b) { return a.n - b.n; });   // pop-over first
+  ts = sized.map(function (x) { return x.t; });
   var cell = null, via = "";
   for (var t = 0; t < ts.length && !cell; t++) {
-    var cells = kids(ts[t]), msgs = [];
-    for (var c = 0; c < cells.length; c++) {
-      var f0 = kids(cells[c])[0];
-      if (f0 && (hasAct(f0, titles.direct) || hasAct(f0, titles.picker[0]))) msgs.push(f0);
-    }
+    var sv = survey(ts[t]);
+    var msgs = sv.filter(function (x) { return x.tb; }), hits = sv.filter(function (x) { return x.hit; });
     // The pop-over: exactly one message, and (when it has text) the text agrees.
-    if (msgs.length === 1 && (snippet.length < 4 || textMatches(cells).length === 1)) { cell = msgs[0]; via = "popover"; break; }
+    if (msgs.length === 1 && (snippet.length < 4 || hits.length === 1)) { cell = balloon(msgs[0]); via = "popover"; break; }
     // Otherwise the one message on screen whose description holds its text (#69).
-    var hits = textMatches(cells);
-    if (hits.length === 1) { cell = hits[0]; via = "text"; }
+    if (hits.length === 1) { cell = balloon(hits[0]); via = "text"; }
     else if (hits.length > 1) return JSON.stringify({ ok: false, why: "more than one message on screen matches; not guessing" });
   }
   if (!cell) return JSON.stringify({ ok: false, why: "could not single out the message on screen (" + ENGINE + ", " + Math.round((Date.now() - T0) / 1000) + " s)" });
