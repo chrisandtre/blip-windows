@@ -3,6 +3,7 @@
 
     imsg-tapback --chat <id> --guid <message guid> --kind <kind> [--remove]
     imsg-tapback --probe --guid <message guid>
+    imsg-tapback --engine
 
     kind: love | like | dislike | laugh | emphasize | question
 
@@ -218,7 +219,9 @@ function run(argv) {
   // needs this process to be trusted for Accessibility (sshd-keygen-wrapper,
   // the grant imsg-read already uses); it never prompts. Anything odd in the
   // bridge and it falls back to System Events.
-  var NAT = null;
+  var NAT = null, WHY = {};
+  var T0 = Date.now();
+  function late() { return Date.now() - T0 > 40000; }
   function nRaw(el, name) { var r = Ref(); try { return $.AXUIElementCopyAttributeValue(el, name, r) === 0 ? r[0] : null; } catch (e) { return null; } }
   function nList(v) {
     if (!v) return [];
@@ -237,15 +240,25 @@ function run(argv) {
   try {
     ObjC.import("AppKit");
     ObjC.import("ApplicationServices");
+    WHY.fns = [typeof $.AXIsProcessTrusted, typeof $.AXUIElementCreateApplication, typeof $.AXUIElementCopyAttributeValue].join(",");
     var running = $.NSRunningApplication.runningApplicationsWithBundleIdentifier("com.apple.MobileSMS");
-    if ($.AXIsProcessTrusted() && running.count > 0) {
+    WHY.running = running.count;
+    WHY.trusted = !!$.AXIsProcessTrusted();
+    if (WHY.trusted && running.count > 0) {
       var axApp = $.AXUIElementCreateApplication(running.objectAtIndex(0).processIdentifier);
-      if (nVal(nRaw(axApp, "AXRole")) === "AXApplication") {
+      try { $.AXUIElementSetMessagingTimeout(axApp, 2.0); } catch (e) { WHY.timeoutErr = String(e); }
+      var r0 = Ref(); WHY.appErr = $.AXUIElementCopyAttributeValue(axApp, "AXRole", r0);
+      WHY.appRole = nVal(r0[0]);
+      if (WHY.appRole === "AXApplication") {
         var w0 = nList(nRaw(axApp, "AXWindows"));
-        if (!w0.length || nVal(nRaw(w0[0], "AXRole")) === "AXWindow") NAT = axApp;
+        WHY.windows = w0.length;
+        WHY.win0Role = w0.length ? nVal(nRaw(w0[0], "AXRole")) : null;
+        if (!w0.length || WHY.win0Role === "AXWindow") NAT = axApp;
       }
     }
-  } catch (e) { NAT = null; }
+  } catch (e) { NAT = null; WHY.err = String(e); }
+  WHY.ms = Date.now() - T0;
+  if (mode === "engine") return JSON.stringify({ ok: true, engine: NAT ? "native" : "system-events", why: WHY });
   var ENGINE = NAT ? "native" : "system-events";
   function attr(el, name) {
     if (NAT) { try { return nVal(nRaw(el, name)); } catch (e) { return null; } }
@@ -337,7 +350,7 @@ function run(argv) {
   // carries the tapback actions ("Name:Heart", ...).
   function findAll(root, id, budget) {
     var queue = [root], seen = 0, out = [];
-    while (queue.length && seen < budget) {
+    while (queue.length && seen < budget && !late()) {
       var el = queue.shift(); seen++;
       if (attr(el, "AXIdentifier") === id) { out.push(el); continue; }
       if (PRUNE[attr(el, "AXRole")]) continue;
@@ -365,7 +378,7 @@ function run(argv) {
   }
   var ts = [];
   for (var w = 0; w < wins.length; w++) ts = ts.concat(findAll(wins[w], "TranscriptCollectionView", 300));
-  if (!ts.length) return JSON.stringify({ ok: false, why: "the conversation transcript was not found" });
+  if (!ts.length) return JSON.stringify({ ok: false, why: "the conversation transcript was not found (" + ENGINE + ", " + Math.round((Date.now() - T0) / 1000) + " s)" });
   if (mode === "close") {
     // The pop-over is the smaller transcript when two are open; AXCancel closes it.
     if (ts.length < 2) return JSON.stringify({ ok: true, closed: false });
@@ -388,7 +401,7 @@ function run(argv) {
     if (hits.length === 1) { cell = hits[0]; via = "text"; }
     else if (hits.length > 1) return JSON.stringify({ ok: false, why: "more than one message on screen matches; not guessing" });
   }
-  if (!cell) return JSON.stringify({ ok: false, why: "could not single out the message on screen" });
+  if (!cell) return JSON.stringify({ ok: false, why: "could not single out the message on screen (" + ENGINE + ", " + Math.round((Date.now() - T0) / 1000) + " s)" });
   if (act(cell, titles.direct)) return JSON.stringify({ ok: true, via: "action/" + via + "/" + ENGINE });
   // No direct action on this build: open the picker and press its button.
   var opened = false;
@@ -416,7 +429,7 @@ def jxa(mode, titles, picker_id, want_selected):
                             "1" if want_selected else "0", TEXT_FILE], capture_output=True, text=True,
                            timeout=150 if mode == "diag" else 60)
     except subprocess.TimeoutExpired:
-        return {"ok": False, "why": "System Events timed out"}
+        return {"ok": False, "why": "the accessibility script timed out"}
     try:
         return json.loads((r.stdout or "").strip().splitlines()[-1])
     except Exception:
@@ -457,6 +470,10 @@ def main():
     opts, i = {"remove": False, "probe": False}, 0
     while i < len(argv):
         a = argv[i]
+        if a == "--engine":
+            # Which AX engine this Mac gets, and why. Touches no message.
+            print(json.dumps(jxa("engine", {}, "", False)))
+            return
         if a in ("--remove", "--probe"):
             opts[a[2:]] = True
         elif a in ("--chat", "--guid", "--kind") and i + 1 < len(argv):
