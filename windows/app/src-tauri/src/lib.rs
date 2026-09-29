@@ -586,8 +586,9 @@ pub fn run_app() {
             let login_on = app.autolaunch().is_enabled().unwrap_or(false);
             let login = CheckMenuItem::with_id(app, "autostart", "Start Blip at login", true, login_on, None::<&str>)?;
             let react = CheckMenuItem::with_id(app, "tapbacks", "Reactions (beta)", true, tapbacks_on(), None::<&str>)?;
+            let pair_item = MenuItem::with_id(app, "pair", "Pair with a Mac…", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit Blip", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open, &read, &PredefinedMenuItem::separator(app)?, &login, &react, &PredefinedMenuItem::separator(app)?, &quit])?;
+            let menu = Menu::with_items(app, &[&open, &read, &PredefinedMenuItem::separator(app)?, &login, &react, &pair_item, &PredefinedMenuItem::separator(app)?, &quit])?;
             let login_item = login.clone();
             let react_item = react.clone();
             let tray = TrayIconBuilder::with_id("blip")
@@ -612,6 +613,10 @@ pub fn run_app() {
                     }
                     "mark-all-read" => {
                         let _ = app.emit("blip://mark-all-read", ());
+                    }
+                    "pair" => {
+                        show_main(app.clone());
+                        let _ = app.emit_to("main", "blip://pair", ());
                     }
                     "quit" => app.exit(0),
                     _ => {}

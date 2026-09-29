@@ -21,19 +21,22 @@ function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 }
 
-export function setupScreen(): Promise<void> {
+/** `closable`: opened from the tray on a PC that already works, so it can
+ *  be dismissed without pairing. */
+export function setupScreen(closable = false): Promise<void> {
   return new Promise((done) => {
     const box = document.createElement("div");
     box.className = "setup";
     document.body.append(box);
-    pairView(box, done);
+    pairView(box, done, closable);
   });
 }
 
-function pairView(box: HTMLElement, done: () => void) {
+function pairView(box: HTMLElement, done: () => void, closable = false) {
   box.innerHTML = `
     <div class="setup-card">
-      <h1>Set up Blip</h1>
+      ${closable ? `<button class="setup-close" type="button" aria-label="Close">✕</button>` : ""}
+      <h1>${closable ? "Pair with a Mac" : "Set up Blip"}</h1>
       <p>Blip reads and sends iMessage through a Mac you own. Start on the Mac, then finish here.</p>
 
       <div class="setup-step">
@@ -78,6 +81,8 @@ function pairView(box: HTMLElement, done: () => void) {
   const go = box.querySelector<HTMLButtonElement>("#setup-go")!;
   const msg = box.querySelector<HTMLParagraphElement>("#setup-msg")!;
   const copy = box.querySelector<HTMLButtonElement>(".setup-copy")!;
+  const close = box.querySelector<HTMLButtonElement>(".setup-close");
+  if (close) close.onclick = () => { alive = false; box.remove(); done(); };
   let macs: FoundMac[] = [];
   let chosen = "";
   let busy = false;
@@ -96,7 +101,7 @@ function pairView(box: HTMLElement, done: () => void) {
   box.querySelector<HTMLAnchorElement>("#setup-password")!.onclick = (e) => {
     e.preventDefault();
     alive = false;
-    passwordView(box, done, () => { alive = true; pairView(box, done); });
+    passwordView(box, done, () => { alive = true; pairView(box, done, closable); });
   };
 
   const digits = () => codeEl.value.replace(/\D/g, "");

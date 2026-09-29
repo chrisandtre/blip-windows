@@ -409,9 +409,15 @@ def paired():
     if os.path.exists(AUTH_KEYS):
         for line in open(AUTH_KEYS).read().splitlines():
             if "blip-dispatch" in line and "blip-selftest" not in line:
-                m = re.search(r" blip:(\S+)\s*$", line) or re.search(r" (\S+)\s*$", line)
                 f = re.search(r'from="([^"]*)"', line)
-                out.append((m.group(1) if m else "?", f.group(1) if f else "anywhere", line))
+                m = re.search(r"(ssh-[a-z0-9-]+|ecdsa-[a-z0-9-]+) (\S+)(?: (.+))?$", line)
+                if not m:
+                    continue
+                body, comment = m.group(2), (m.group(3) or "").strip()
+                if comment.startswith("blip:"):
+                    comment = comment[5:]
+                name = comment or "unnamed key …" + body[-8:]
+                out.append((name, f.group(1) if f else "anywhere", line))
     return out
 
 

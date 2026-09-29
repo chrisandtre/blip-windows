@@ -178,6 +178,9 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .setup-manual input { width: 100%; box-sizing: border-box; }
 .setup-card .setup-code { display: block; width: 9ch; box-sizing: content-box; margin: 8px 0; font: 600 24px "Cascadia Mono", Consolas, monospace; letter-spacing: 2px; text-align: center; }
 .setup-alt { font-size: 12px; margin-top: 22px; }
+.setup-card { position: relative; }
+.setup-card .setup-close { position: absolute; top: 0; right: 0; margin: 0; padding: 4px 9px; background: transparent; color: var(--muted); font-size: 14px; }
+.setup-card .setup-close:hover { background: var(--hover); color: var(--fg); }
 
 /* ---- tray popout (compact): one column, list or conversation */
 #app.compact { grid-template-columns: minmax(0, 1fr); border: 1px solid var(--line); }

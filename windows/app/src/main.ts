@@ -72,6 +72,9 @@ async function leader() {
   view.tapbacksOn = s.tapbacks;
   void listen<boolean>("blip://tapbacks", (e) => { view.tapbacksOn = e.payload; });
   if (!s.configured) await setupScreen();
+  // Tray > Pair with a Mac: the same screen on a configured PC (a new Mac,
+  // or a re-pair). The poller keeps running; it picks up the new host.
+  void listen("blip://pair", () => { if (!document.querySelector(".setup")) void setupScreen(true); });
   void invoke("start_watch");
   void poller.start();
 }
