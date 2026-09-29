@@ -24,6 +24,19 @@ async function bridge(cmd: string, args: Args) {
     return "http://127.0.0.1:1421/file?p=" + encodeURIComponent(path);
   },
   async invoke(cmd: string, args: Args = {}) {
+    // ?setup shows the first-run pairing screen with a fake Mac; 482913 pairs.
+    if (location.search.includes("setup")) {
+      if (cmd === "setup_state") return { ...(await bridge(cmd, args)), configured: false };
+      if (cmd === "discover_macs") {
+        await new Promise((r) => setTimeout(r, 1500));
+        return [{ name: "Chris’s iMac", addrs: ["192.168.1.109", "100.85.192.43"], port: 7447, user: "chris" }];
+      }
+      if (cmd === "pair_mac") {
+        await new Promise((r) => setTimeout(r, 1200));
+        if (args.code !== "482913") throw "That code didn't match. Check the code on the Mac and try again.";
+        return { host: "chris@chriss-imac", computer: "Chris’s iMac", bridge: "0.3.0" };
+      }
+    }
     if (cmd === "core" || cmd === "shim" || cmd === "setup_state") return bridge(cmd, args);
     if (cmd === "plugin:event|listen") return nextId++;
     if (cmd === "plugin:notification|is_permission_granted") return true;

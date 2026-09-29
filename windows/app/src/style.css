@@ -155,6 +155,29 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .setup-card button { background: var(--blue); color: #fff; border-radius: 8px; padding: 9px 18px; font-weight: 600; margin-top: 6px; }
 .setup-card button:disabled { opacity: .5; }
 .setup-msg { min-height: 20px; }
+.setup-msg.bad { color: var(--urgent); }
+.setup-card { width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow-y: auto; }
+.setup-step { display: flex; gap: 14px; margin: 18px 0; }
+.setup-num { flex: none; width: 26px; height: 26px; border-radius: 50%; background: var(--blue); color: #fff; display: grid; place-items: center; font-weight: 600; font-size: 13px; margin-top: 1px; }
+.setup-grow { flex: 1; min-width: 0; }
+.setup-cmd { display: flex; align-items: center; gap: 8px; margin: 8px 0 6px; padding: 8px 8px 8px 12px; border-radius: 8px; background: var(--side); border: 1px solid var(--line); }
+.setup-cmd code { flex: 1; min-width: 0; font: 12.5px "Cascadia Mono", Consolas, monospace; overflow-wrap: anywhere; user-select: all; }
+.setup-card .setup-copy { margin: 0; padding: 5px 12px; font-size: 12px; }
+.setup-card a { color: var(--blue); text-decoration: none; }
+.setup-card a:hover { text-decoration: underline; }
+.setup-macs { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.setup-card .setup-mac { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px; border: 1px solid var(--line); cursor: pointer; margin: 0; font-weight: 400; flex-direction: row; }
+.setup-card .setup-mac.on { border-color: var(--blue); background: var(--active); }
+.setup-card .setup-mac input { accent-color: var(--blue); margin: 0; }
+.setup-mac-name { font-weight: 600; flex: 1; }
+.setup-searching { display: flex; align-items: center; gap: 10px; color: var(--muted); padding: 9px 0; }
+.setup-spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--blue); animation: setup-spin .8s linear infinite; }
+@keyframes setup-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .setup-spin { animation: none; } }
+.setup-manual summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.setup-manual input { width: 100%; box-sizing: border-box; }
+.setup-card .setup-code { display: block; width: 9ch; box-sizing: content-box; margin: 8px 0; font: 600 24px "Cascadia Mono", Consolas, monospace; letter-spacing: 2px; text-align: center; }
+.setup-alt { font-size: 12px; margin-top: 22px; }
 
 /* ---- tray popout (compact): one column, list or conversation */
 #app.compact { grid-template-columns: minmax(0, 1fr); border: 1px solid var(--line); }

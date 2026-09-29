@@ -10,6 +10,8 @@
 //! ~/.config/blip, ~/.cache/blip, ~/.local/state/blip and ~/bin shims resolve
 //! there with no path changes in the core.
 
+mod pair;
+
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -172,6 +174,45 @@ fn setup_state() -> SetupState {
         .last()
         .unwrap_or_default();
     SetupState { configured: !host.is_empty(), host, shims: bin_dir().join("imsg.exe").exists(), tapbacks: tapbacks_on() }
+}
+
+/// Macs on this network running `blip pair` (Bonjour, a few seconds).
+#[tauri::command]
+async fn discover_macs() -> Result<Vec<pair::FoundMac>, String> {
+    pair::discover(3).await
+}
+
+/// Pair with a Mac by the code `blip pair` shows, then point Blip at it.
+#[tauri::command]
+async fn pair_mac(addr: String, port: Option<u16>, code: String) -> Result<pair::Paired, String> {
+    let addr = addr.trim().to_string();
+    if addr.is_empty() || addr.starts_with('-') || !addr.chars().all(|c| c.is_ascii_alphanumeric() || ".-_:%[]".contains(c)) {
+        return Err("That doesn't look like a Mac name or address.".into());
+    }
+    let key = blip_wire::profile_dir("USERPROFILE").join(".ssh").join("blip_win_ed25519");
+    let p = pair::pair(&addr, port.unwrap_or(pair::PORT), &code, &key, pair::tailscale_ips().await, &pair::known_hosts_path()).await?;
+    std::fs::create_dir_all(blip_wire::config_dir()).map_err(|e| e.to_string())?;
+    if !blip_wire::conf_path().exists() {
+        std::fs::write(
+            blip_wire::conf_path(),
+            "# Blip bridge (Windows) - read as data, never executed, by the Blip client\n\
+             # remote_bin is single-quoted on purpose: expanded on the MAC, not here\n",
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    let key_s = key.to_string_lossy().to_string();
+    for (k, v) in [("host", p.host.as_str()), ("remote_bin", "'$HOME/.blip/bin'"), ("python", "python3"), ("key", key_s.as_str())] {
+        set_conf_value(k, v).map_err(|e| e.to_string())?;
+    }
+    if conf_value("country_code").is_none() {
+        set_conf_value("country_code", "1").map_err(|e| e.to_string())?;
+    }
+    // A new Mac (or new keys): forget where the mux last found one, and let
+    // the next call start a fresh mux with the new host.
+    let _ = std::fs::remove_file(blip_wire::local_dir().join("mux.addr"));
+    let _ = Command::new("taskkill").args(["/F", "/IM", "blip-mux.exe"]).creation_flags(0x0800_0000).output().await;
+    sync_bin();
+    Ok(p)
 }
 
 /// Run blip-setup.ps1 in its own console window, where ssh can ask for the
@@ -529,7 +570,7 @@ pub fn run_app() {
         .plugin(tauri_plugin_autostart::Builder::new().arg(HIDDEN_ARG).build())
         .manage(Tray(Mutex::new(None)))
         .manage(Watching(AtomicBool::new(false)))
-        .invoke_handler(tauri::generate_handler![core, shim, start_watch, set_status, show_main, write_draft, setup_state, run_setup, toast, open_attachment])
+        .invoke_handler(tauri::generate_handler![core, shim, start_watch, set_status, show_main, write_draft, setup_state, run_setup, discover_macs, pair_mac, toast, open_attachment])
         .setup(|app| {
             if let Ok(dir) = app.path().resource_dir() {
                 let _ = RESOURCES.set(dir);

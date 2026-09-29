@@ -5,6 +5,7 @@ blip-check: the three Mac permissions Blip needs, checked the way Blip uses them
   python3 ~/.blip/bin/blip-check             # human lines, exit 0 when all pass
   python3 ~/.blip/bin/blip-check --json      # {"chatdb", "automation", "contacts", "markread": bool, ...}
   python3 ~/.blip/bin/blip-check --markread  # ALSO test the optional read-push grant
+  python3 ~/.blip/bin/blip-check --no-automation   # skip the Messages probe (never prompts)
 
 --markread is opt-in because that probe is consent-triggering in its own right:
 it talks to System Events, which pops a second Automation prompt, and on
@@ -188,7 +189,11 @@ def check_markread() -> tuple[bool, str]:
 
 
 def main() -> None:
-    results = {"chatdb": check_chatdb(), "automation": check_automation(), "contacts": check_contacts()}
+    # --no-automation: `blip setup` polls this while the person grants Full
+    # Disk Access, and a poll must never fire the Messages consent prompt.
+    automation = ((True, "not checked (--no-automation)") if "--no-automation" in sys.argv
+                  else check_automation())
+    results = {"chatdb": check_chatdb(), "automation": automation, "contacts": check_contacts()}
     # Optional: its absence costs only mark-as-read, so it must not fail the run.
     # Opt-IN as well as optional, because the probe itself asks macOS for a
     # permission: it pops a System Events Automation prompt, and on macOS 26 a

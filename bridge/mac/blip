@@ -1,0 +1,477 @@
+#!/usr/bin/env python3
+"""blip — set up this Mac as a Blip gateway and pair PCs with it.
+
+  blip setup      install the bridge tools, walk through the Mac permissions
+                  (each ticks itself off the moment macOS grants it), then pair
+  blip pair       show a six-digit code; type it into Blip on the PC
+  blip status     what is granted, which PCs are paired
+  blip unpair N   remove a paired PC by the name `blip status` shows
+  blip update     refresh ~/.blip/bin after `brew upgrade blip`
+  blip --version
+
+Installed by Homebrew (brew install chrisandtre/blip/blip) or run from a
+checkout (bridge/mac/blip). Nothing here needs sudo, and nothing grants a
+permission by itself: macOS allows only a person to do that. What this does is
+open the exact Settings pane, say what to click, and watch for it.
+"""
+import getpass
+import json
+import os
+import re
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import time
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, HERE)
+import blip_pair  # noqa: E402
+
+VERSION = "0.3.0"
+HOME = os.path.expanduser("~")
+BIN = os.path.join(HOME, ".blip", "bin")
+AUTH_KEYS = os.path.join(HOME, ".ssh", "authorized_keys")
+SELFTEST_KEY = os.path.join(HOME, ".blip", "selftest_ed25519")
+SELFTEST_KNOWN = os.path.join(HOME, ".blip", "selftest_known_hosts")
+TOOLS = ["imsg", "imsg-send", "imsg-read", "imsg-tapback", "contacts", "contact-repair.js", "contact-save",
+         "contact-save.js", "tcc-check", "blip-check", "blip-dispatch", "calling_codes.py"]
+WRAPPER = "/usr/libexec/sshd-keygen-wrapper"
+PANES = {
+    "sharing": "x-apple.systempreferences:com.apple.Sharing-Settings.extension",
+    "fda": "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
+    "accessibility": "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+    "automation": "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation",
+}
+
+TTY = sys.stdout.isatty()
+
+
+def c(code, s):
+    return "\033[%sm%s\033[0m" % (code, s) if TTY else s
+
+
+def ok(s):
+    print("  " + c("32", "✓") + " " + s)
+
+
+def bad(s):
+    print("  " + c("31", "✗") + " " + s)
+
+
+def step(s):
+    print("\n" + c("1", s))
+
+
+def note(s):
+    print("    " + s)
+
+
+def ask(prompt, default=False):
+    hint = "[Y/n]" if default else "[y/N]"
+    try:
+        a = input("    %s %s " % (prompt, hint)).strip().lower()
+    except EOFError:
+        return default
+    return default if not a else a.startswith("y")
+
+
+def wait_enter(prompt="Press Enter when done"):
+    try:
+        input("    " + c("2", prompt + " "))
+    except EOFError:
+        pass
+
+
+def open_pane(name):
+    subprocess.run(["open", PANES[name]], capture_output=True)
+
+
+def pbcopy(text):
+    try:
+        subprocess.run(["pbcopy"], input=text.encode(), capture_output=True, timeout=5)
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+class Spinner:
+    FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+    def __init__(self, text):
+        self.text, self.i = text, 0
+
+    def tick(self):
+        if TTY:
+            sys.stdout.write("\r    %s %s " % (self.FRAMES[self.i % len(self.FRAMES)], self.text))
+            sys.stdout.flush()
+            self.i += 1
+
+    def done(self):
+        if TTY:
+            sys.stdout.write("\r" + " " * (len(self.text) + 8) + "\r")
+            sys.stdout.flush()
+
+
+def poll(text, check, every=2.0, limit=None):
+    """Run check() until it returns truthy; Ctrl+C gives up. Returns the value."""
+    sp, start = Spinner(text + c("2", "  (Ctrl+C to skip)")), time.monotonic()
+    try:
+        while True:
+            v = check()
+            if v:
+                return v
+            if limit and time.monotonic() - start > limit:
+                return None
+            end = time.monotonic() + every
+            while time.monotonic() < end:
+                sp.tick()
+                time.sleep(0.1)
+    except KeyboardInterrupt:
+        print()
+        return None
+    finally:
+        sp.done()
+
+
+# ---------------------------------------------------------------- tools
+
+def install_tools():
+    """Link each bridge tool into ~/.blip/bin. Links follow `brew upgrade`;
+    a checkout copy is fine too (blip-dispatch only runs files from there)."""
+    os.makedirs(BIN, mode=0o700, exist_ok=True)
+    stable = HERE
+    m = re.match(r"^(.*)/Cellar/blip/[^/]+/libexec$", HERE)
+    if m and os.path.isdir(os.path.join(m.group(1), "opt", "blip", "libexec")):
+        stable = os.path.join(m.group(1), "opt", "blip", "libexec")   # survives upgrades
+    for t in TOOLS:
+        src, dst = os.path.join(stable, t), os.path.join(BIN, t)
+        if not os.path.exists(src):
+            raise SystemExit("blip: missing %s — reinstall (brew reinstall blip)" % src)
+        if os.path.lexists(dst):
+            os.remove(dst)
+        os.symlink(src, dst)
+    return stable
+
+
+# ---------------------------------------------------------------- checks
+
+def remote_login_on():
+    try:
+        with socket.create_connection(("127.0.0.1", 22), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
+def ensure_selftest_key():
+    """A loopback-only key, confined like a PC's, so this Mac can check its
+    permissions the way Blip will use them: over ssh, as sshd."""
+    if not os.path.exists(SELFTEST_KEY):
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "blip-selftest", "-f", SELFTEST_KEY],
+                       check=True)
+    pub = open(SELFTEST_KEY + ".pub").read().split()
+    pub = "%s %s" % (pub[0], pub[1])
+    line = 'from="127.0.0.1,::1",restrict,command="$HOME/.blip/bin/blip-dispatch" %s blip-selftest' % pub
+    write_authorized(pub, line)
+
+
+def write_authorized(pub, line):
+    os.makedirs(os.path.dirname(AUTH_KEYS), mode=0o700, exist_ok=True)
+    text = open(AUTH_KEYS).read() if os.path.exists(AUTH_KEYS) else ""
+    new = blip_pair.replace_in_authorized_keys(text, pub, line)
+    tmp = AUTH_KEYS + ".blip.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(new)
+    os.replace(tmp, AUTH_KEYS)
+
+
+def over_ssh(*args, timeout=30):
+    """Run a Blip tool through the loopback key, as a PC would."""
+    try:
+        r = subprocess.run(["ssh", "-n", "-i", SELFTEST_KEY, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
+                            "-o", "StrictHostKeyChecking=accept-new", "-o", "UserKnownHostsFile=" + SELFTEST_KNOWN,
+                            "-o", "ConnectTimeout=5", getpass.getuser() + "@127.0.0.1"] + list(args),
+                           capture_output=True, text=True, timeout=timeout)
+        return r.returncode, r.stdout, r.stderr
+    except subprocess.TimeoutExpired:
+        return 124, "", "timed out"
+
+
+def check(*flags, timeout=40):
+    code, out, err = over_ssh("blip-check", "--json", *flags, timeout=timeout)
+    try:
+        return json.loads(out.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return {"_error": (err or out or "no answer").strip()[-300:], "_code": code}
+
+
+def ssh_works():
+    code, out, _ = over_ssh("ping", timeout=10)
+    return code == 0 and out.strip() == "pong"
+
+
+# ---------------------------------------------------------------- setup
+
+def setup(args):
+    print(c("1", "Blip Mac setup") + c("2", "  v" + VERSION))
+    note("This Mac will be the gateway: your PC reads and sends iMessage through it.")
+
+    step("1. Bridge tools")
+    if not shutil.which("python3") or subprocess.run(["python3", "-c", "import sqlite3"], capture_output=True).returncode:
+        bad("python3 is not usable yet. Run:  xcode-select --install   then run blip setup again.")
+        return 1
+    where = install_tools()
+    ok("installed to ~/.blip/bin (from %s)" % where)
+
+    step("2. Remote Login")
+    if remote_login_on():
+        ok("Remote Login is on")
+    else:
+        note("Blip talks to this Mac over ssh. Turn on " + c("1", "Remote Login") + " in the window that just opened")
+        note("(General → Sharing → Remote Login).")
+        open_pane("sharing")
+        if not poll("waiting for Remote Login…", remote_login_on):
+            bad("Remote Login is still off. Run blip setup again when it is on.")
+            return 1
+        ok("Remote Login is on")
+    ensure_selftest_key()
+    if not poll("checking ssh to this Mac…", ssh_works, every=1.5, limit=20):
+        bad("ssh to this Mac with Blip's test key did not work.")
+        note("If Remote Login is set to \"Only these users\", add your account (%s)." % getpass.getuser())
+        return 1
+
+    step("3. Full Disk Access (reads your messages and contacts)")
+    r = check("--no-automation")
+    if r.get("chatdb", {}).get("ok"):
+        ok("granted — " + r["chatdb"]["detail"])
+    else:
+        note("Easiest: in the Sharing window, click " + c("1", "ⓘ") + " next to Remote Login and turn on")
+        note(c("1", "Allow full disk access for remote users") + ".")
+        note("Or: Privacy & Security → Full Disk Access → + → press ⌘⇧G and paste the path")
+        note("(already copied): " + WRAPPER)
+        pbcopy(WRAPPER)
+        open_pane("sharing")
+        got = poll("waiting for Full Disk Access…",
+                   lambda: check("--no-automation").get("chatdb", {}).get("ok"))
+        if not got:
+            bad("Full Disk Access is still missing. Blip cannot read messages without it.")
+            return 1
+        ok("Full Disk Access granted")
+
+    step("4. Sending (Automation → Messages)")
+    r0 = check("--no-automation")
+    note("macOS asks once whether ssh may control Messages. A prompt will appear on this")
+    note("screen: click " + c("1", "Allow") + ". It expires in about two minutes, and an unanswered")
+    note("prompt counts as a denial.")
+    wait_enter("Press Enter, then watch for the prompt")
+    sp = Spinner("asking Messages…")
+    sp.tick()
+    r = check(timeout=170)
+    sp.done()
+    if r.get("automation", {}).get("ok"):
+        ok("Messages allows Blip to send")
+    else:
+        bad("not allowed: " + r.get("automation", {}).get("detail", r.get("_error", "")))
+        note(r.get("automation", {}).get("fix", ""))
+        open_pane("automation")
+        return 1
+    del r0
+
+    step("5. Optional: mark read and reactions (Accessibility)")
+    note("Lets Blip tell your iPhone a conversation was read, and send reactions ❤️ 👍")
+    note("(reactions only while this Mac is unlocked). Everything else works without it.")
+    if ask("Set it up now?", default=True):
+        note("Privacy & Security → Accessibility → + → ⌘⇧G and paste (copied): " + WRAPPER)
+        note("A second prompt, for System Events, may appear here: click Allow.")
+        pbcopy(WRAPPER)
+        open_pane("accessibility")
+        got = poll("waiting for Accessibility…",
+                   lambda: check("--no-automation", "--markread", timeout=170).get("markread", {}).get("ok"),
+                   every=3)
+        if got:
+            ok("Accessibility granted")
+        else:
+            note("Skipped. Run blip setup again any time to add it.")
+
+    print()
+    ok(c("1", "This Mac is ready."))
+    return pair(args)
+
+
+# ---------------------------------------------------------------- pairing
+
+def local_addrs():
+    out = subprocess.run(["ifconfig"], capture_output=True, text=True).stdout
+    ips = re.findall(r"\binet6? ([0-9a-fA-F:.]+)", out)
+    return [ip for ip in ips if not ip.startswith(("127.", "::1", "fe80", "169.254."))]
+
+
+def tailscale_name():
+    for exe in ("tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"):
+        try:
+            r = subprocess.run([exe, "status", "--json"], capture_output=True, text=True, timeout=5)
+            if r.returncode == 0:
+                return (json.loads(r.stdout).get("Self", {}).get("DNSName") or "").rstrip(".")
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+    return ""
+
+
+def scutil(key):
+    return subprocess.run(["scutil", "--get", key], capture_output=True, text=True).stdout.strip()
+
+
+def host_keys():
+    keys = []
+    for t in ("ed25519", "ecdsa", "rsa"):
+        p = "/etc/ssh/ssh_host_%s_key.pub" % t
+        try:
+            parts = open(p).read().split()
+            keys.append("%s %s" % (parts[0], parts[1]))
+        except (OSError, IndexError):
+            pass
+    return keys
+
+
+def describe():
+    local = scutil("LocalHostName")
+    names = [n for n in [local, local + ".local" if local else "", tailscale_name()] if n]
+    return {"user": getpass.getuser(), "computer": scutil("ComputerName") or local, "names": names,
+            "addrs": local_addrs(), "port": 22, "host_keys": host_keys(), "bridge": VERSION}
+
+
+def enroll(hello, peer_ip):
+    pats = blip_pair.from_patterns(peer_ip, hello.get("tsips", []))
+    line = blip_pair.authorized_line(hello["pubkey"], hello["name"], pats)
+    try:
+        write_authorized(hello["pubkey"], line)
+    except OSError as e:
+        return "could not write authorized_keys: %s" % e
+    return ""
+
+
+def advertise():
+    name = scutil("ComputerName") or socket.gethostname()
+    try:
+        return subprocess.Popen(["dns-sd", "-R", name, "_blip-pair._tcp", "local", str(blip_pair.PORT),
+                                 "v=%d" % blip_pair.PROTOCOL, "user=" + getpass.getuser()],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        return None
+
+
+def pair(args):
+    if not os.path.exists(os.path.join(BIN, "blip-dispatch")):
+        bad("Run  blip setup  first.")
+        return 1
+    code = blip_pair.new_code()
+    d = describe()
+    step("Pair a PC")
+    note("In Blip on your PC, pick " + c("1", d["computer"]) + " and enter this code:")
+    print("\n        " + c("1;36", blip_pair.show_code(code)) + "\n")
+    note(c("2", "Waiting up to 10 minutes. Ctrl+C to stop."))
+    adv = advertise()
+
+    def event(kind, detail=None):
+        if kind == "wrong":
+            bad("wrong code entered on the PC (%d tries left)" % detail)
+        elif kind == "locked":
+            bad("too many wrong codes; pairing closed. Run  blip pair  for a new code.")
+        elif kind == "expired":
+            bad("code expired. Run  blip pair  for a new one.")
+        elif kind == "bad":
+            note(c("2", "ignored a connection: %s" % detail))
+
+    try:
+        hello = blip_pair.listen(code, enroll, describe, on_event=event)
+    except KeyboardInterrupt:
+        print()
+        return 1
+    except OSError as e:
+        bad(str(e))
+        return 1
+    finally:
+        if adv:
+            adv.terminate()
+    if not hello:
+        return 1
+    ok(c("1", "Paired with %s." % hello["name"]) + " Blip on the PC is connecting now.")
+    return 0
+
+
+# ---------------------------------------------------------------- status
+
+def paired():
+    out = []
+    if os.path.exists(AUTH_KEYS):
+        for line in open(AUTH_KEYS).read().splitlines():
+            if "blip-dispatch" in line and "blip-selftest" not in line:
+                m = re.search(r" blip:(\S+)\s*$", line) or re.search(r" (\S+)\s*$", line)
+                f = re.search(r'from="([^"]*)"', line)
+                out.append((m.group(1) if m else "?", f.group(1) if f else "anywhere", line))
+    return out
+
+
+def status(args):
+    print(c("1", "Blip") + c("2", "  v" + VERSION))
+    ok("Remote Login on") if remote_login_on() else bad("Remote Login off")
+    if os.path.exists(SELFTEST_KEY) and remote_login_on():
+        r = check("--no-automation")
+        for k, label in (("chatdb", "Full Disk Access"), ("contacts", "Contacts")):
+            v = r.get(k, {})
+            ok("%s — %s" % (label, v.get("detail"))) if v.get("ok") else bad("%s — %s" % (label, v.get("detail", r.get("_error"))))
+        note(c("2", "(Automation and Accessibility are checked by blip setup: checking them can pop a prompt)"))
+    step("Paired PCs")
+    ps = paired()
+    if not ps:
+        note("none — run  blip pair")
+    for name, frm, _ in ps:
+        note("%-24s from %s" % (name, frm))
+    return 0
+
+
+def unpair(args):
+    if not args:
+        bad("usage: blip unpair <name>   (names: blip status)")
+        return 64
+    want = args[0]
+    lines = open(AUTH_KEYS).read().splitlines() if os.path.exists(AUTH_KEYS) else []
+    keep = [l for l in lines if not ("blip-dispatch" in l and l.rstrip().endswith(" blip:" + want))]
+    if len(keep) == len(lines):
+        bad("no paired PC named %s" % want)
+        return 1
+    tmp = AUTH_KEYS + ".blip.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write("\n".join(keep) + "\n")
+    os.replace(tmp, AUTH_KEYS)
+    ok("unpaired %s" % want)
+    return 0
+
+
+def update(args):
+    ok("tools linked from %s" % install_tools())
+    return 0
+
+
+def main():
+    signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+    argv = sys.argv[1:]
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(__doc__.strip())
+        return 0
+    if argv[0] in ("-V", "--version", "version"):
+        print("blip " + VERSION)
+        return 0
+    cmds = {"setup": setup, "pair": pair, "status": status, "unpair": unpair, "update": update}
+    if argv[0] not in cmds:
+        bad("unknown command %r (try: blip --help)" % argv[0])
+        return 64
+    return cmds[argv[0]](argv[1:])
+
+
+if __name__ == "__main__":
+    sys.exit(main())
