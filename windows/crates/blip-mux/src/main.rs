@@ -193,7 +193,17 @@ impl Link {
 
     async fn resolve(&self, c: &Conf, skip: Option<SocketAddr>) -> Vec<SocketAddr> {
         let mut out = Vec::new();
-        if let Ok(it) = tokio::net::lookup_host((c.host.as_str(), c.port)).await {
+        // A bare name ("chriss-imac") resolves through Tailscale's MagicDNS
+        // to the Tailscale address only, whenever Tailscale is up on this PC,
+        // even while the Mac's own Tailscale is down; its Bonjour name
+        // (name.local) is the same Mac on the home network. The host key is
+        // still checked by the configured name, so this only adds routes.
+        let mut names = vec![c.host.clone()];
+        if !c.host.contains('.') && !c.host.contains(':') {
+            names.push(format!("{}.local", c.host));
+        }
+        for name in names {
+        if let Ok(it) = tokio::net::lookup_host((name.as_str(), c.port)).await {
             let mut all: Vec<SocketAddr> = it.collect();
             // IPv4 first, then routable IPv6; link-local fe80:: rarely works without a scope.
             all.sort_by_key(|a| match a {
@@ -206,6 +216,7 @@ impl Link {
                     out.push(a);
                 }
             }
+        }
         }
         out
     }
